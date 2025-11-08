@@ -5,6 +5,7 @@ import { Phone, PhoneOff, AlertCircle, CheckCircle2, Volume2, Mic, MicOff, Radio
 import CallClient from "@/lib/callClient"
 import { DebugPanel } from "@/components/DebugPanel"
 import { AudioDiagnostics } from "@/components/AudioDiagnostics"
+import { MicPermissionDialog } from "@/components/MicPermissionDialog"
 
 interface DemoCallCardProps {
   campaignId: string
@@ -40,11 +41,29 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
   const [audioFormat, setAudioFormat] = useState<AudioFormat>({})
   const [microphoneLevel, setMicrophoneLevel] = useState(0)
   const [aiIsProcessing, setAIIsProcessing] = useState(false)
+  const [showMicDialog, setShowMicDialog] = useState(false)
+  const [micStream, setMicStream] = useState<MediaStream | null>(null)
   const callClientRef = useRef<CallClient | null>(null)
 
   const isCallActive = callState === "ringing" || callState === "connecting" || callState === "connected"
 
   const handleStartCall = async () => {
+    setError(null)
+    setShowMicDialog(true)
+  }
+
+  const handleMicrophoneGranted = async (stream: MediaStream) => {
+    setMicStream(stream)
+    setShowMicDialog(false)
+    await startCallWithMicrophone(stream)
+  }
+
+  const handleMicrophoneDenied = (errorMessage: string) => {
+    setShowMicDialog(false)
+    setError(errorMessage)
+  }
+
+  const startCallWithMicrophone = async (stream: MediaStream) => {
     setError(null)
     setIsRinging(true)
     setEvents([])
@@ -57,6 +76,7 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
     const client = new CallClient({
       agentId,
       campaignId,
+      microphoneStream: stream,
       onStateChange: (state) => {
         setCallState(state)
         if (state === "connected") {
@@ -101,6 +121,10 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
       callClientRef.current.end()
       callClientRef.current = null
     }
+    if (micStream) {
+      micStream.getTracks().forEach((track) => track.stop())
+      setMicStream(null)
+    }
     setCallState("idle")
     setCallDuration(0)
     setIsRinging(false)
@@ -112,7 +136,6 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
   }
 
   const handleForceResumeAudio = () => {
-    // Placeholder for the actual implementation
     console.log("Force resume audio functionality needs to be implemented.")
   }
 
@@ -167,6 +190,12 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
 
   return (
     <>
+      <MicPermissionDialog
+        open={showMicDialog}
+        onPermissionGranted={handleMicrophoneGranted}
+        onPermissionDenied={handleMicrophoneDenied}
+      />
+
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Main Call Card */}
         <div className="lg:col-span-2 bg-white rounded-2xl shadow-lg p-8">

@@ -7,6 +7,7 @@
 type CallClientConfig = {
   agentId: string
   campaignId: string
+  microphoneStream?: MediaStream
   onStateChange?: (state: "idle" | "ringing" | "connecting" | "connected" | "ended") => void
   onDurationUpdate?: (seconds: number) => void
   onError?: (error: string) => void
@@ -72,7 +73,6 @@ class CallClient {
         this.audioContext = new AudioContext({ sampleRate: 24000 })
         console.log("[v0] AudioContext created, state:", this.audioContext.state)
 
-        // Force resume if suspended (requires user gesture)
         if (this.audioContext.state === "suspended") {
           console.log("[v0] AudioContext suspended - resuming...")
           await this.audioContext.resume()
@@ -82,19 +82,23 @@ class CallClient {
         console.error("[v0] Failed to create AudioContext:", err)
       }
 
-      console.log("[v0] 🎤 Requesting microphone access...")
-      this.localStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          sampleRate: { ideal: 24000 },
-          channelCount: { ideal: 1 },
-        },
-      })
+      if (this.config.microphoneStream) {
+        console.log("[v0] 🎤 Using pre-acquired microphone stream")
+        this.localStream = this.config.microphoneStream
+      } else {
+        console.log("[v0] 🎤 Requesting microphone access...")
+        this.localStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            sampleRate: { ideal: 24000 },
+            channelCount: { ideal: 1 },
+          },
+        })
+      }
 
       const [micTrack] = this.localStream.getAudioTracks()
-
       micTrack.enabled = true
 
       console.log("[v0] ✓ Microphone acquired:", {
@@ -111,15 +115,25 @@ class CallClient {
 
       if (this.audioContext && this.localStream) {
         try {
-          const micSource = this.audioContext.createMediaStreamSource(this.localStream)
+          // Create a dedicated stream for Web Audio monitoring (won't be affected by track enable/disable)
+          const monitorStream = this.localStream.clone()
+          const micSource = this.audioContext.createMediaStreamSource(monitorStream)
           this.microphoneAnalyzer = this.audioContext.createAnalyser()
           this.microphoneAnalyzer.fftSize = 256
           this.microphoneAnalyzer.smoothingTimeConstant = 0.3
+          this.microphoneAnalyzer.minDecibels = -90
+          this.microphoneAnalyzer.maxDecibels = -10
           micSource.connect(this.microphoneAnalyzer)
 
-          console.log("[v0] ✓ Microphone analyzer connected to AudioContext")
+          console.log("[v0] ✓ Microphone analyzer connected using cloned stream")
+          console.log("[v0] ✓ Analyzer settings:", {
+            fftSize: this.microphoneAnalyzer.fftSize,
+            frequencyBinCount: this.microphoneAnalyzer.frequencyBinCount,
+            minDecibels: this.microphoneAnalyzer.minDecibels,
+            maxDecibels: this.microphoneAnalyzer.maxDecibels,
+          })
 
-          // Start monitoring mic levels
+          // Start monitoring immediately
           this.monitorMicrophoneLevels()
         } catch (err) {
           console.error("[v0] Failed to create microphone analyzer:", err)
@@ -564,6 +578,14 @@ class CallClient {
 
         console.log("[v0] OpenAI Event:", message.type, message)
 
+        if (message.type === "output_audio_buffer.started") {
+          this.pauseMicrophoneForTTS()
+        }
+
+        if (message.type === "output_audio_buffer.stopped") {
+          this.resumeMicrophoneAfterTTS()
+        }
+
         if (message.type === "response.audio.delta") {
           if (!this.aiIsSpeaking) {
             this.aiIsSpeaking = true
@@ -582,6 +604,9 @@ class CallClient {
             this.aiIsProcessing = false
             this.updateProcessingState()
           }
+          setTimeout(() => {
+            this.resumeMicrophoneAfterTTS()
+          }, 250)
         }
 
         if (message.type === "response.created") {
@@ -865,21 +890,41 @@ class CallClient {
   private monitorMicrophoneLevels(): void {
     if (!this.microphoneAnalyzer) return
 
-    const dataArray = new Uint8Array(this.microphoneAnalyzer.frequencyBinCount)
+    const bufferLength = this.microphoneAnalyzer.frequencyBinCount
+    const dataArray = new Uint8Array(bufferLength)
+    const timeDomainArray = new Uint8Array(this.microphoneAnalyzer.fftSize)
 
     const checkLevel = () => {
       if (!this.microphoneAnalyzer || !this.localStream) return
 
+      // Get frequency data
       this.microphoneAnalyzer.getByteFrequencyData(dataArray)
-      const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length
-      this.lastMicrophoneLevel = Math.round(average)
+      const frequencyAverage = dataArray.reduce((a, b) => a + b, 0) / dataArray.length
+
+      // Get time domain data for RMS calculation
+      this.microphoneAnalyzer.getByteTimeDomainData(timeDomainArray)
+      let sum = 0
+      for (let i = 0; i < timeDomainArray.length; i++) {
+        const normalized = (timeDomainArray[i] - 128) / 128
+        sum += normalized * normalized
+      }
+      const rms = Math.sqrt(sum / timeDomainArray.length) * 100
+
+      // Use the maximum of both measurements
+      this.lastMicrophoneLevel = Math.max(Math.round(frequencyAverage), Math.round(rms))
 
       if (this.lastMicrophoneLevel > 10) {
-        console.log(`[v0] 🎤 Microphone input level: ${this.lastMicrophoneLevel} (LOUD)`)
+        console.log(
+          `[v0] 🎤 Microphone input level: ${this.lastMicrophoneLevel} (LOUD - freq:${Math.round(frequencyAverage)} rms:${Math.round(rms)})`,
+        )
       } else if (this.lastMicrophoneLevel > 3) {
-        console.log(`[v0] 🎤 Microphone input level: ${this.lastMicrophoneLevel} (moderate)`)
+        console.log(
+          `[v0] 🎤 Microphone input level: ${this.lastMicrophoneLevel} (moderate - freq:${Math.round(frequencyAverage)} rms:${Math.round(rms)})`,
+        )
       } else {
-        console.log(`[v0] 🎤 Microphone input level: ${this.lastMicrophoneLevel} (quiet/silent)`)
+        console.log(
+          `[v0] 🎤 Microphone input level: ${this.lastMicrophoneLevel} (quiet/silent - freq:${Math.round(frequencyAverage)} rms:${Math.round(rms)})`,
+        )
       }
 
       if (this.config.onMicrophoneLevel) {
@@ -965,6 +1010,35 @@ class CallClient {
 
     // Start checking after 1 second
     setTimeout(checkStats, 1000)
+  }
+
+  private pauseMicrophoneForTTS(): void {
+    if (!this.localStream) return
+
+    const track = this.localStream.getAudioTracks()[0]
+    if (track && track.enabled) {
+      track.enabled = false
+      console.log("[v0] 🤫 Mic paused during TTS to avoid echo")
+    }
+  }
+
+  private resumeMicrophoneAfterTTS(): void {
+    if (!this.localStream) return
+
+    const track = this.localStream.getAudioTracks()[0]
+    if (track && !track.enabled && track.readyState === "live") {
+      track.enabled = true
+      console.log("[v0] 🔊 Mic RESUMED after TTS - ready for user input!")
+
+      // Ensure AudioContext is running
+      if (this.audioContext && this.audioContext.state === "suspended") {
+        this.audioContext.resume().then(() => {
+          console.log("[v0] AudioContext also resumed")
+        })
+      }
+    } else if (track && track.enabled) {
+      console.log("[v0] ✓ Mic already enabled")
+    }
   }
 }
 
