@@ -46,23 +46,44 @@ export async function POST(request: NextRequest) {
     let leadInfo: { first_name?: string; last_name?: string; email?: string; phone?: string } | null = null
     if (call_id) {
       console.log("[Handoff] 🔍 Fetching lead information for call...")
-      const { data: lead } = await supabaseAdmin
-        .from("leads")
-        .select("first_name, last_name, email, phone")
-        .eq("campaign_id", campaign_id)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .single()
 
-      if (lead) {
-        leadInfo = lead
-        console.log("[Handoff] ✓ Lead info found:", {
-          name: [lead.first_name, lead.last_name].filter(Boolean).join(" "),
-          email: lead.email,
-          phone: lead.phone,
-        })
+      const { data: leadEvent, error: leadEventError } = await supabaseAdmin
+        .from("call_events")
+        .select("payload_json")
+        .eq("call_id", call_id)
+        .eq("type", "lead_saved")
+        .order("ts", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (leadEventError) {
+        console.error("[Handoff] ⚠ Failed to fetch lead_saved event for call:", leadEventError)
+      }
+
+      const leadPayload = (leadEvent?.payload_json as { lead_id?: string } | null) ?? null
+      const leadId = leadPayload?.lead_id
+
+      if (leadId) {
+        const { data: lead, error: leadError } = await supabaseAdmin
+          .from("leads")
+          .select("first_name, last_name, email, phone")
+          .eq("id", leadId)
+          .maybeSingle()
+
+        if (leadError) {
+          console.error("[Handoff] ⚠ Failed to fetch lead info for call:", leadError)
+        } else if (lead) {
+          leadInfo = lead
+          console.log("[Handoff] ✓ Lead info found:", {
+            name: [lead.first_name, lead.last_name].filter(Boolean).join(" "),
+            email: lead.email,
+            phone: lead.phone,
+          })
+        } else {
+          console.log("[Handoff] ⚠ Lead referenced in call events was not found")
+        }
       } else {
-        console.log("[Handoff] ⚠ No lead info found for this call")
+        console.log("[Handoff] ⚠ No lead_saved event found for this call")
       }
     }
 
@@ -141,12 +162,6 @@ export async function POST(request: NextRequest) {
     console.log("[Handoff] - Customer:", customerName || "Anonymous")
     console.log("[Handoff] - Reason:", reason)
     console.log("[Handoff] - Has lead data:", !!leadInfo)
-
-    const slackWebhook = process.env.SLACK_WEBHOOK_URL
-    if (!slackWebhook) {
-      console.error("[Handoff] ❌ SLACK_WEBHOOK_URL not configured")
-      return NextResponse.json({ error: "Server configuration error: SLACK_WEBHOOK_URL missing" }, { status: 500 })
-    }
 
     const slackResult = await sendSlackNotification({
       campaignName: campaign.name,
