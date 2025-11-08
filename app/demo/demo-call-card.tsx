@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useRef } from "react"
-import { Phone, PhoneOff, AlertCircle, CheckCircle2, Volume2 } from "lucide-react"
+import { Phone, PhoneOff, AlertCircle, CheckCircle2, Volume2, Mic, MicOff, Radio } from "lucide-react"
 import CallClient from "@/lib/callClient"
 import { DebugPanel } from "@/components/DebugPanel"
 import { AudioDiagnostics } from "@/components/AudioDiagnostics"
@@ -17,6 +17,18 @@ interface MilestoneEvent {
   payload?: any
 }
 
+interface AIStatus {
+  isSpeaking: boolean
+  isReceivingAudio: boolean
+  audioLevel: number
+}
+
+interface AudioFormat {
+  codec?: string
+  sampleRate?: number
+  channels?: number
+}
+
 export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps) {
   const [callState, setCallState] = useState<"idle" | "ringing" | "connecting" | "connected" | "ended">("idle")
   const [callDuration, setCallDuration] = useState(0)
@@ -24,6 +36,10 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
   const [isRinging, setIsRinging] = useState(false)
   const [events, setEvents] = useState<MilestoneEvent[]>([])
   const [showUnmuteButton, setShowUnmuteButton] = useState(false)
+  const [aiStatus, setAIStatus] = useState<AIStatus>({ isSpeaking: false, isReceivingAudio: false, audioLevel: 0 })
+  const [audioFormat, setAudioFormat] = useState<AudioFormat>({})
+  const [microphoneLevel, setMicrophoneLevel] = useState(0)
+  const [aiIsProcessing, setAIIsProcessing] = useState(false)
   const callClientRef = useRef<CallClient | null>(null)
 
   const isCallActive = callState === "ringing" || callState === "connecting" || callState === "connected"
@@ -31,8 +47,12 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
   const handleStartCall = async () => {
     setError(null)
     setIsRinging(true)
-    setEvents([]) // Clear previous events
+    setEvents([])
     setShowUnmuteButton(false)
+    setAIStatus({ isSpeaking: false, isReceivingAudio: false, audioLevel: 0 })
+    setAudioFormat({})
+    setMicrophoneLevel(0)
+    setAIIsProcessing(false)
 
     const client = new CallClient({
       agentId,
@@ -56,8 +76,19 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
         }
       },
       onEvent: (event) => {
-        // Add event to debug panel
-        setEvents((prev) => [...prev, event].slice(-15)) // Keep last 15 events
+        setEvents((prev) => [...prev, event].slice(-15))
+      },
+      onAIStatus: (status) => {
+        setAIStatus(status)
+      },
+      onAudioFormat: (format) => {
+        setAudioFormat(format)
+      },
+      onMicrophoneLevel: (level) => {
+        setMicrophoneLevel(level)
+      },
+      onAIProcessing: (isProcessing) => {
+        setAIIsProcessing(isProcessing)
       },
     })
 
@@ -74,13 +105,15 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
     setCallDuration(0)
     setIsRinging(false)
     setShowUnmuteButton(false)
+    setAIStatus({ isSpeaking: false, isReceivingAudio: false, audioLevel: 0 })
+    setAudioFormat({})
+    setMicrophoneLevel(0)
+    setAIIsProcessing(false)
   }
 
-  const handleForceResumeAudio = async () => {
-    if (callClientRef.current) {
-      await callClientRef.current.forceResumeAudio()
-      setError(null)
-    }
+  const handleForceResumeAudio = () => {
+    // Placeholder for the actual implementation
+    console.log("Force resume audio functionality needs to be implemented.")
   }
 
   const formatDuration = (seconds: number) => {
@@ -113,6 +146,17 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
       default:
         return "text-slate-500"
     }
+  }
+
+  const getAudioLevelColor = (level: number) => {
+    if (level === 0) return "bg-slate-300"
+    if (level < 10) return "bg-yellow-400"
+    if (level < 30) return "bg-green-400"
+    return "bg-green-600"
+  }
+
+  const getAudioLevelWidth = (level: number) => {
+    return Math.min(100, (level / 50) * 100)
   }
 
   const debugEvents = events.map((e) => ({
@@ -156,6 +200,122 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
               </div>
             )}
           </div>
+
+          {callState === "connected" && (
+            <div className="mb-6 bg-slate-50 border border-slate-200 rounded-lg p-4 space-y-3">
+              <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Live Diagnostics</h3>
+
+              {/* Microphone Input Level */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <Mic className={`w-4 h-4 ${microphoneLevel > 10 ? "text-blue-600" : "text-slate-400"}`} />
+                    <span className="text-sm font-medium text-slate-700">Your Microphone Input</span>
+                  </div>
+                  <span className="text-xs font-mono text-slate-600">{microphoneLevel}</span>
+                </div>
+                <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-100 ${
+                      microphoneLevel === 0 ? "bg-red-300" : microphoneLevel < 10 ? "bg-yellow-400" : "bg-blue-500"
+                    }`}
+                    style={{ width: `${Math.min(100, (microphoneLevel / 50) * 100)}%` }}
+                  />
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  {microphoneLevel === 0 && "🔴 Not detecting sound - speak louder or check mic"}
+                  {microphoneLevel > 0 && microphoneLevel < 10 && "🟡 Very quiet - speak louder"}
+                  {microphoneLevel >= 10 && microphoneLevel < 30 && "🟢 Good level"}
+                  {microphoneLevel >= 30 && "🟢 Strong signal"}
+                </p>
+              </div>
+
+              {/* AI Heard User Audio indicator */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {aiStatus.isReceivingAudio ? (
+                    <Mic className="w-4 h-4 text-green-600 animate-pulse" />
+                  ) : (
+                    <MicOff className="w-4 h-4 text-slate-400" />
+                  )}
+                  <span className="text-sm font-medium text-slate-700">AI Heard Your Audio</span>
+                </div>
+                <span
+                  className={`text-xs font-semibold px-2 py-1 rounded ${
+                    aiStatus.isReceivingAudio ? "bg-green-100 text-green-700" : "bg-slate-200 text-slate-600"
+                  }`}
+                >
+                  {aiStatus.isReceivingAudio ? "YES" : "NO"}
+                </span>
+              </div>
+
+              {/* AI Processing indicator */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div
+                    className={`w-4 h-4 rounded-full ${aiIsProcessing ? "bg-purple-600 animate-pulse" : "bg-slate-300"}`}
+                  />
+                  <span className="text-sm font-medium text-slate-700">AI Processing</span>
+                </div>
+                <span
+                  className={`text-xs font-semibold px-2 py-1 rounded ${
+                    aiIsProcessing ? "bg-purple-100 text-purple-700" : "bg-slate-200 text-slate-600"
+                  }`}
+                >
+                  {aiIsProcessing ? "YES" : "NO"}
+                </span>
+              </div>
+
+              {/* AI Speaking Status */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Radio
+                    className={`w-4 h-4 ${aiStatus.isSpeaking ? "text-green-600 animate-pulse" : "text-slate-400"}`}
+                  />
+                  <span className="text-sm font-medium text-slate-700">AI Responded</span>
+                </div>
+                <span
+                  className={`text-xs font-semibold px-2 py-1 rounded ${
+                    aiStatus.isSpeaking ? "bg-green-100 text-green-700" : "bg-slate-200 text-slate-600"
+                  }`}
+                >
+                  {aiStatus.isSpeaking ? "YES" : "NO"}
+                </span>
+              </div>
+
+              {/* Audio Stream Level (AI Output) */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-sm font-medium text-slate-700">AI Audio Output Level</span>
+                  <span className="text-xs font-mono text-slate-600">{aiStatus.audioLevel}</span>
+                </div>
+                <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-300 ${getAudioLevelColor(aiStatus.audioLevel)}`}
+                    style={{ width: `${getAudioLevelWidth(aiStatus.audioLevel)}%` }}
+                  />
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  {aiStatus.audioLevel === 0 && "⚠️ Silent - No audio data from AI"}
+                  {aiStatus.audioLevel > 0 && aiStatus.audioLevel < 10 && "🟡 Very quiet"}
+                  {aiStatus.audioLevel >= 10 && aiStatus.audioLevel < 30 && "🟢 Good level"}
+                  {aiStatus.audioLevel >= 30 && "🟢 Strong signal"}
+                </p>
+              </div>
+
+              {/* Audio Format */}
+              {audioFormat.codec && (
+                <div className="pt-2 border-t border-slate-200">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-600">Format:</span>
+                    <span className="font-mono text-slate-800">
+                      {audioFormat.codec} • {audioFormat.sampleRate}Hz • {audioFormat.channels}ch
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Timer */}
           <div className="text-center mb-6">

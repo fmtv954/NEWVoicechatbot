@@ -12,6 +12,10 @@ type CallClientConfig = {
   onError?: (error: string) => void
   onCallStarted?: (callId: string) => void
   onEvent?: (event: { type: string; timestamp: number; payload?: any }) => void
+  onAIStatus?: (status: { isSpeaking: boolean; isReceivingAudio: boolean; audioLevel: number }) => void
+  onAudioFormat?: (format: { codec?: string; sampleRate?: number; channels?: number }) => void
+  onMicrophoneLevel?: (level: number) => void
+  onAIProcessing?: (isProcessing: boolean) => void
 }
 
 class CallClient {
@@ -30,6 +34,14 @@ class CallClient {
   private audioAnalyzer: AnalyserNode | null = null
   private ringStartTime = 0
   private minRingDuration = 5000 // 5 seconds minimum ring before stopping
+  private aiIsSpeaking = false
+  private isReceivingUserAudio = false
+  private lastAudioLevel = 0
+  private diagnosticInterval: NodeJS.Timeout | null = null
+  private greetingSent = false
+  private aiIsProcessing = false
+  private microphoneAnalyzer: AnalyserNode | null = null
+  private lastMicrophoneLevel = 0
 
   constructor(config: CallClientConfig) {
     this.config = config
@@ -56,27 +68,62 @@ class CallClient {
       this.config.onStateChange?.("ringing")
       this.emit("ringing")
 
-      // Get user microphone with echo cancellation, noise suppression, and auto gain control
-      this.localStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      })
-
       try {
-        this.audioContext = new AudioContext()
+        this.audioContext = new AudioContext({ sampleRate: 24000 })
         console.log("[v0] AudioContext created, state:", this.audioContext.state)
 
+        // Force resume if suspended (requires user gesture)
         if (this.audioContext.state === "suspended") {
-          console.warn("[v0] AudioContext is suspended - may need user interaction")
-          // Try to resume AudioContext
+          console.log("[v0] AudioContext suspended - resuming...")
           await this.audioContext.resume()
           console.log("[v0] AudioContext resumed, state:", this.audioContext.state)
         }
       } catch (err) {
         console.error("[v0] Failed to create AudioContext:", err)
+      }
+
+      console.log("[v0] 🎤 Requesting microphone access...")
+      this.localStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: { ideal: 24000 },
+          channelCount: { ideal: 1 },
+        },
+      })
+
+      const [micTrack] = this.localStream.getAudioTracks()
+
+      micTrack.enabled = true
+
+      console.log("[v0] ✓ Microphone acquired:", {
+        readyState: micTrack.readyState,
+        muted: micTrack.muted,
+        enabled: micTrack.enabled,
+        label: micTrack.label,
+        settings: micTrack.getSettings(),
+      })
+
+      if (micTrack.readyState !== "live") {
+        throw new Error("Microphone track is not live - check device permissions")
+      }
+
+      if (this.audioContext && this.localStream) {
+        try {
+          const micSource = this.audioContext.createMediaStreamSource(this.localStream)
+          this.microphoneAnalyzer = this.audioContext.createAnalyser()
+          this.microphoneAnalyzer.fftSize = 256
+          this.microphoneAnalyzer.smoothingTimeConstant = 0.3
+          micSource.connect(this.microphoneAnalyzer)
+
+          console.log("[v0] ✓ Microphone analyzer connected to AudioContext")
+
+          // Start monitoring mic levels
+          this.monitorMicrophoneLevels()
+        } catch (err) {
+          console.error("[v0] Failed to create microphone analyzer:", err)
+        }
       }
 
       try {
@@ -122,43 +169,51 @@ class CallClient {
       }
 
       const { callId, sessionClientSecret, rtcConfiguration } = await sessionResponse.json()
+
+      // Validate session response
+      if (!sessionClientSecret || typeof sessionClientSecret !== "string" || sessionClientSecret.length === 0) {
+        console.error("[v0] Invalid session response - missing or empty sessionClientSecret")
+        throw new Error("Invalid session credentials received from server")
+      }
+
       this.callId = callId
       this.config.onCallStarted?.(callId)
       this.emit("call_started", { callId })
 
-      // Create RTCPeerConnection
+      console.log("[v0] ✓ Session created successfully")
+      console.log("[v0] - Call ID:", callId)
+      console.log("[v0] - Client Secret length:", sessionClientSecret.length)
+      console.log("[v0] - Client Secret prefix:", sessionClientSecret.substring(0, 20) + "...")
+
+      console.log("[v0] Session created, callId:", callId)
+      console.log("[v0] Session client secret length:", sessionClientSecret?.length || 0)
+
       this.peerConnection = new RTCPeerConnection(rtcConfiguration)
 
-      // Add local audio track to peer connection
-      this.localStream.getAudioTracks().forEach((track) => {
-        this.peerConnection!.addTrack(track, this.localStream!)
+      console.log("[v0] Adding sendrecv audio transceiver...")
+      this.peerConnection.addTransceiver("audio", {
+        direction: "sendrecv",
       })
+
+      console.log("[v0] Adding microphone track to peer connection...")
+      const [track] = this.localStream.getAudioTracks()
+      const sender = this.peerConnection.addTrack(track, this.localStream)
+      console.log("[v0] ✓ Microphone track added, sender:", {
+        track: sender.track?.id,
+        kind: sender.track?.kind,
+        enabled: sender.track?.enabled,
+      })
+
+      this.monitorOutboundAudio(sender)
 
       // Create data channel for events
       this.dataChannel = this.peerConnection.createDataChannel("oai-events")
       this.dataChannel.addEventListener("open", () => {
         console.log("[v0] Data channel opened")
         this.emit("data_channel_open")
-        // Send session update with ephemeral key
-        this.sendRealtimeEvent({
-          type: "session.update",
-          session: {
-            modalities: ["audio", "text"],
-            instructions: "", // Instructions already set on server
-            voice: "sage",
-            input_audio_format: "pcm16",
-            output_audio_format: "pcm16",
-            input_audio_transcription: {
-              model: "whisper-1",
-            },
-            turn_detection: {
-              type: "server_vad",
-              threshold: 0.5,
-              prefix_padding_ms: 300,
-              silence_duration_ms: 500,
-            },
-          },
-        })
+
+        // Data channel ready, waiting for ring to finish before greeting...
+        console.log("[v0] Data channel ready, waiting for ring to complete before greeting...")
       })
 
       this.attachToolHandlers()
@@ -174,6 +229,7 @@ class CallClient {
             const remainingRing = Math.max(0, this.minRingDuration - ringElapsed)
 
             console.log(`[v0] First remote audio received after ${ringElapsed}ms ring`)
+            console.log(`[v0] Waiting ${remainingRing}ms for ring to complete...`)
 
             // Wait for remaining ring time before stopping
             setTimeout(() => {
@@ -184,6 +240,14 @@ class CallClient {
               if (this.ringAudio) {
                 this.ringAudio.pause()
                 this.ringAudio = null
+              }
+
+              if (!this.greetingSent && this.dataChannel && this.dataChannel.readyState === "open") {
+                console.log("[v0] 🎤 Ring complete - requesting AI greeting now...")
+                this.sendRealtimeEvent({
+                  type: "response.create",
+                })
+                this.greetingSent = true
               }
 
               // Start timer
@@ -246,6 +310,7 @@ class CallClient {
               .play()
               .then(() => {
                 console.log("[v0] ✓ Remote audio play() succeeded")
+                console.log("[v0] ✓ Audio element volume:", this.remoteAudioElement!.volume)
 
                 // Check if actually playing
                 if (this.remoteAudioElement!.paused) {
@@ -258,7 +323,7 @@ class CallClient {
               .catch((err) => {
                 console.error("[v0] ✗ Remote audio play() FAILED:", err)
                 if (err.name === "NotAllowedError") {
-                  this.config.onError?.("Audio blocked by browser. Click 'Unmute' to enable sound.")
+                  this.config.onError?.("Audio blocked by browser. Click 'Enable Audio' to hear the AI.")
                 } else {
                   this.config.onError?.("Failed to play AI audio: " + err.message)
                 }
@@ -293,21 +358,30 @@ class CallClient {
       const offer = await this.peerConnection.createOffer()
       await this.peerConnection.setLocalDescription(offer)
 
-      // Send offer to OpenAI Realtime API
-      const sdpResponse = await fetch("https://api.openai.com/v1/realtime", {
+      console.log("[v0] SDP offer created with microphone attached")
+
+      console.log("[v0] Sending SDP offer via proxy...")
+      const sdpResponse = await fetch("/api/webrtc/sdp", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${sessionClientSecret}`,
-          "Content-Type": "application/sdp",
+          "Content-Type": "application/json",
         },
-        body: offer.sdp,
+        body: JSON.stringify({
+          offer: offer.sdp,
+          sessionClientSecret,
+        }),
       })
 
       if (!sdpResponse.ok) {
-        throw new Error("Failed to exchange SDP with OpenAI")
+        const errorData = await sdpResponse.json().catch(() => ({ error: "Unknown error" }))
+        console.error("[v0] SDP exchange failed:", sdpResponse.status, errorData)
+        throw new Error(errorData.error || `Failed to exchange SDP: ${sdpResponse.status}`)
       }
 
       const answerSdp = await sdpResponse.text()
+
+      console.log("[v0] SDP answer received, length:", answerSdp.length)
+
       await this.peerConnection.setRemoteDescription({
         type: "answer",
         sdp: answerSdp,
@@ -388,6 +462,11 @@ class CallClient {
    * Clean up all resources
    */
   private cleanup(): void {
+    if (this.diagnosticInterval) {
+      clearInterval(this.diagnosticInterval)
+      this.diagnosticInterval = null
+    }
+
     // Stop ring tone if still playing
     if (this.ringAudio) {
       this.ringAudio.pause()
@@ -435,11 +514,18 @@ class CallClient {
     }
 
     this.audioAnalyzer = null
+    this.microphoneAnalyzer = null
 
     // Reset state
     this.hasReceivedAudio = false
     this.startTime = 0
     this.searchedQueries.clear()
+    this.aiIsSpeaking = false
+    this.isReceivingUserAudio = false
+    this.lastAudioLevel = 0
+    this.greetingSent = false
+    this.aiIsProcessing = false
+    this.lastMicrophoneLevel = 0
   }
 
   /**
@@ -475,6 +561,69 @@ class CallClient {
     this.dataChannel.addEventListener("message", async (event) => {
       try {
         const message = JSON.parse(event.data)
+
+        console.log("[v0] OpenAI Event:", message.type, message)
+
+        if (message.type === "response.audio.delta") {
+          if (!this.aiIsSpeaking) {
+            this.aiIsSpeaking = true
+            console.log("[v0] 🎤 AI Started Speaking")
+            this.updateDiagnostics()
+          }
+        }
+
+        if (message.type === "response.audio.done" || message.type === "response.done") {
+          if (this.aiIsSpeaking) {
+            this.aiIsSpeaking = false
+            console.log("[v0] 🔇 AI Stopped Speaking")
+            this.updateDiagnostics()
+          }
+          if (this.aiIsProcessing) {
+            this.aiIsProcessing = false
+            this.updateProcessingState()
+          }
+        }
+
+        if (message.type === "response.created") {
+          this.aiIsProcessing = true
+          console.log("[v0] 🤔 AI Processing Response...")
+          this.updateProcessingState()
+        }
+
+        if (message.type === "input_audio_buffer.speech_started") {
+          this.isReceivingUserAudio = true
+          console.log("[v0] 🎙️ AI DETECTED your speech!")
+          this.updateDiagnostics()
+        }
+
+        if (message.type === "input_audio_buffer.speech_stopped") {
+          this.isReceivingUserAudio = false
+          console.log("[v0] 🔇 User stopped speaking")
+          this.updateDiagnostics()
+        }
+
+        if (message.type === "response.output_item.added") {
+          console.log("[v0] ✅ AI Responding...")
+        }
+
+        if (message.type === "session.created" || message.type === "session.updated") {
+          console.log("[v0] 📋 Session Config:", {
+            voice: message.session?.voice,
+            model: message.session?.model,
+            input_audio_format: message.session?.input_audio_format,
+            output_audio_format: message.session?.output_audio_format,
+            turn_detection: message.session?.turn_detection,
+            modalities: message.session?.modalities,
+          })
+
+          if (this.config.onAudioFormat) {
+            this.config.onAudioFormat({
+              codec: message.session?.output_audio_format,
+              sampleRate: 24000, // Default for OpenAI Realtime
+              channels: 1,
+            })
+          }
+        }
 
         // Listen for function_call_arguments.done event
         if (message.type === "response.function_call_arguments.done") {
@@ -677,12 +826,15 @@ class CallClient {
 
       this.audioAnalyzer.getByteFrequencyData(dataArray)
       const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length
+      this.lastAudioLevel = Math.round(average)
 
       if (average > 5) {
-        console.log(`[v0] ✓ Audio stream active, level: ${Math.round(average)}`)
+        console.log(`[v0] ✓ Audio stream active, level: ${this.lastAudioLevel}`)
       } else {
-        console.log(`[v0] ⚠ Audio stream silent, level: ${Math.round(average)}`)
+        console.log(`[v0] ⚠ Audio stream silent, level: ${this.lastAudioLevel}`)
       }
+
+      this.updateDiagnostics()
 
       // Check again in 2 seconds if still connected
       if (this.remoteAudioElement) {
@@ -692,6 +844,56 @@ class CallClient {
 
     // Start monitoring after 1 second
     setTimeout(checkLevel, 1000)
+  }
+
+  private updateDiagnostics(): void {
+    if (this.config.onAIStatus) {
+      this.config.onAIStatus({
+        isSpeaking: this.aiIsSpeaking,
+        isReceivingAudio: this.isReceivingUserAudio,
+        audioLevel: this.lastAudioLevel,
+      })
+    }
+  }
+
+  private updateProcessingState(): void {
+    if (this.config.onAIProcessing) {
+      this.config.onAIProcessing(this.aiIsProcessing)
+    }
+  }
+
+  private monitorMicrophoneLevels(): void {
+    if (!this.microphoneAnalyzer) return
+
+    const dataArray = new Uint8Array(this.microphoneAnalyzer.frequencyBinCount)
+
+    const checkLevel = () => {
+      if (!this.microphoneAnalyzer || !this.localStream) return
+
+      this.microphoneAnalyzer.getByteFrequencyData(dataArray)
+      const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length
+      this.lastMicrophoneLevel = Math.round(average)
+
+      if (this.lastMicrophoneLevel > 10) {
+        console.log(`[v0] 🎤 Microphone input level: ${this.lastMicrophoneLevel} (LOUD)`)
+      } else if (this.lastMicrophoneLevel > 3) {
+        console.log(`[v0] 🎤 Microphone input level: ${this.lastMicrophoneLevel} (moderate)`)
+      } else {
+        console.log(`[v0] 🎤 Microphone input level: ${this.lastMicrophoneLevel} (quiet/silent)`)
+      }
+
+      if (this.config.onMicrophoneLevel) {
+        this.config.onMicrophoneLevel(this.lastMicrophoneLevel)
+      }
+
+      // Check again in 100ms for responsive updates
+      if (this.localStream) {
+        setTimeout(checkLevel, 100)
+      }
+    }
+
+    // Start monitoring immediately
+    checkLevel()
   }
 
   async forceResumeAudio(): Promise<void> {
@@ -710,6 +912,59 @@ class CallClient {
         console.error("[v0] Failed to manually resume audio:", err)
       }
     }
+  }
+
+  private monitorOutboundAudio(sender: RTCRtpSender): void {
+    let lastBytes = 0
+    let lastPackets = 0
+
+    const checkStats = async () => {
+      if (!sender || !this.peerConnection) return
+
+      try {
+        const stats = await sender.getStats()
+        let currentBytes = 0
+        let currentPackets = 0
+
+        stats.forEach((report) => {
+          if (report.type === "outbound-rtp" && report.kind === "audio") {
+            currentBytes = report.bytesSent || 0
+            currentPackets = report.packetsSent || 0
+          }
+        })
+
+        const bytesIncreased = currentBytes > lastBytes
+        const packetsIncreased = currentPackets > lastPackets
+
+        if (bytesIncreased && packetsIncreased) {
+          console.log("[v0] ✓ MICROPHONE TRANSMITTING:", {
+            bytes: currentBytes,
+            packets: currentPackets,
+            delta: currentBytes - lastBytes,
+          })
+
+          // Update diagnostics to show we're transmitting
+          if (!this.isReceivingUserAudio) {
+            console.log("[v0] 🎙️ Microphone audio is being SENT to OpenAI")
+          }
+        } else if (lastBytes > 0) {
+          console.log("[v0] ⚠ Microphone NOT transmitting - bytes/packets not increasing")
+        }
+
+        lastBytes = currentBytes
+        lastPackets = currentPackets
+
+        // Check again in 500ms
+        if (this.peerConnection) {
+          setTimeout(checkStats, 500)
+        }
+      } catch (err) {
+        console.error("[v0] Failed to get sender stats:", err)
+      }
+    }
+
+    // Start checking after 1 second
+    setTimeout(checkStats, 1000)
   }
 }
 
