@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
         input_audio_transcription: {
           model: "whisper-1",
         },
-        turn_detection: null,
+        turn_detection: { type: "server_vad", threshold: 0.5 },
         modalities: ["text", "audio"],
       }),
     })
