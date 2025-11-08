@@ -41,6 +41,22 @@ export function MicPermissionDialog({ open, onPermissionGranted, onPermissionDen
       })
 
       console.log("[v0] ✓ Microphone permission granted!")
+
+      // Create and resume AudioContext within the same user gesture (critical for mobile)
+      try {
+        const audioContext = new AudioContext({ sampleRate: 24000 })
+        console.log("[v0] AudioContext created within user gesture, state:", audioContext.state)
+
+        if (audioContext.state === "suspended") {
+          await audioContext.resume()
+          console.log("[v0] ✓ AudioContext resumed, state:", audioContext.state)
+        }
+        // Store context on stream for later retrieval
+        ;(stream as any)._audioContext = audioContext
+      } catch (audioErr) {
+        console.error("[v0] Failed to initialize AudioContext:", audioErr)
+      }
+
       onPermissionGranted(stream)
     } catch (err: any) {
       console.error("[v0] ✗ Microphone permission denied:", err)

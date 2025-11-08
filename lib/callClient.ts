@@ -69,22 +69,16 @@ class CallClient {
       this.config.onStateChange?.("ringing")
       this.emit("ringing")
 
-      try {
-        this.audioContext = new AudioContext({ sampleRate: 24000 })
-        console.log("[v0] AudioContext created, state:", this.audioContext.state)
-
-        if (this.audioContext.state === "suspended") {
-          console.log("[v0] AudioContext suspended - resuming...")
-          await this.audioContext.resume()
-          console.log("[v0] AudioContext resumed, state:", this.audioContext.state)
-        }
-      } catch (err) {
-        console.error("[v0] Failed to create AudioContext:", err)
-      }
-
       if (this.config.microphoneStream) {
         console.log("[v0] 🎤 Using pre-acquired microphone stream")
         this.localStream = this.config.microphoneStream
+
+        // Check if AudioContext was attached during permission grant
+        const preAudioContext = (this.localStream as any)._audioContext
+        if (preAudioContext && preAudioContext.state === "running") {
+          this.audioContext = preAudioContext
+          console.log("[v0] ✓ Using pre-created AudioContext from permission dialog")
+        }
       } else {
         console.log("[v0] 🎤 Requesting microphone access...")
         this.localStream = await navigator.mediaDevices.getUserMedia({
@@ -96,6 +90,22 @@ class CallClient {
             channelCount: { ideal: 1 },
           },
         })
+      }
+
+      // Create AudioContext if not already created
+      if (!this.audioContext) {
+        try {
+          this.audioContext = new AudioContext({ sampleRate: 24000 })
+          console.log("[v0] AudioContext created, state:", this.audioContext.state)
+
+          if (this.audioContext.state === "suspended") {
+            console.log("[v0] AudioContext suspended - attempting resume...")
+            await this.audioContext.resume()
+            console.log("[v0] AudioContext resumed, state:", this.audioContext.state)
+          }
+        } catch (err) {
+          console.error("[v0] Failed to create AudioContext:", err)
+        }
       }
 
       const [micTrack] = this.localStream.getAudioTracks()
@@ -115,9 +125,7 @@ class CallClient {
 
       if (this.audioContext && this.localStream) {
         try {
-          // Create a dedicated stream for Web Audio monitoring (won't be affected by track enable/disable)
-          const monitorStream = this.localStream.clone()
-          const micSource = this.audioContext.createMediaStreamSource(monitorStream)
+          const micSource = this.audioContext.createMediaStreamSource(this.localStream)
           this.microphoneAnalyzer = this.audioContext.createAnalyser()
           this.microphoneAnalyzer.fftSize = 256
           this.microphoneAnalyzer.smoothingTimeConstant = 0.3
@@ -125,7 +133,7 @@ class CallClient {
           this.microphoneAnalyzer.maxDecibels = -10
           micSource.connect(this.microphoneAnalyzer)
 
-          console.log("[v0] ✓ Microphone analyzer connected using cloned stream")
+          console.log("[v0] ✓ Microphone analyzer connected to SAME stream being transmitted")
           console.log("[v0] ✓ Analyzer settings:", {
             fftSize: this.microphoneAnalyzer.fftSize,
             frequencyBinCount: this.microphoneAnalyzer.frequencyBinCount,
@@ -211,14 +219,23 @@ class CallClient {
 
       console.log("[v0] Adding microphone track to peer connection...")
       const [track] = this.localStream.getAudioTracks()
+
+      // Double-check track is enabled and live
+      if (!track.enabled || track.readyState !== "live") {
+        console.error("[v0] ⚠️ Track not ready:", { enabled: track.enabled, readyState: track.readyState })
+        track.enabled = true
+      }
+
       const sender = this.peerConnection.addTrack(track, this.localStream)
       console.log("[v0] ✓ Microphone track added, sender:", {
         track: sender.track?.id,
         kind: sender.track?.kind,
         enabled: sender.track?.enabled,
+        muted: sender.track?.muted,
+        readyState: sender.track?.readyState,
       })
 
-      this.monitorOutboundAudio(sender)
+      this.monitorOutboundAudioLevel(sender)
 
       // Create data channel for events
       this.dataChannel = this.peerConnection.createDataChannel("oai-events")
@@ -949,19 +966,27 @@ class CallClient {
       console.log("[v0] AudioContext resumed, state:", this.audioContext.state)
     }
 
-    if (this.remoteAudioElement && this.remoteAudioElement.paused) {
-      try {
-        await this.remoteAudioElement.play()
-        console.log("[v0] Remote audio manually resumed")
-      } catch (err) {
-        console.error("[v0] Failed to manually resume audio:", err)
+    if (this.remoteAudioElement) {
+      // Ensure volume is at maximum
+      this.remoteAudioElement.volume = 1.0
+
+      if (this.remoteAudioElement.paused) {
+        try {
+          await this.remoteAudioElement.play()
+          console.log("[v0] ✓ Remote audio manually resumed and playing")
+        } catch (err) {
+          console.error("[v0] Failed to manually resume audio:", err)
+        }
+      } else {
+        console.log("[v0] ✓ Audio already playing")
       }
     }
   }
 
-  private monitorOutboundAudio(sender: RTCRtpSender): void {
+  private monitorOutboundAudioLevel(sender: RTCRtpSender): void {
     let lastBytes = 0
     let lastPackets = 0
+    let lastAudioEnergy = 0
 
     const checkStats = async () => {
       if (!sender || !this.peerConnection) return
@@ -970,36 +995,46 @@ class CallClient {
         const stats = await sender.getStats()
         let currentBytes = 0
         let currentPackets = 0
+        let audioLevel = 0
+        let totalAudioEnergy = 0
 
         stats.forEach((report) => {
           if (report.type === "outbound-rtp" && report.kind === "audio") {
             currentBytes = report.bytesSent || 0
             currentPackets = report.packetsSent || 0
+            audioLevel = report.audioLevel || 0
+            totalAudioEnergy = report.totalAudioEnergy || 0
           }
         })
 
         const bytesIncreased = currentBytes > lastBytes
         const packetsIncreased = currentPackets > lastPackets
+        const energyIncreased = totalAudioEnergy > lastAudioEnergy
 
         if (bytesIncreased && packetsIncreased) {
-          console.log("[v0] ✓ MICROPHONE TRANSMITTING:", {
-            bytes: currentBytes,
-            packets: currentPackets,
-            delta: currentBytes - lastBytes,
-          })
-
-          // Update diagnostics to show we're transmitting
-          if (!this.isReceivingUserAudio) {
-            console.log("[v0] 🎙️ Microphone audio is being SENT to OpenAI")
+          if (energyIncreased && audioLevel > 0) {
+            console.log("[v0] ✓ AUDIO TRANSMITTING (with sound):", {
+              bytes: currentBytes,
+              packets: currentPackets,
+              audioLevel: audioLevel.toFixed(4),
+              energyDelta: (totalAudioEnergy - lastAudioEnergy).toFixed(6),
+            })
+          } else {
+            console.log("[v0] ⚠️ Bytes transmitting but NO AUDIO ENERGY - sending silence frames:", {
+              bytes: currentBytes,
+              packets: currentPackets,
+              audioLevel: audioLevel.toFixed(4),
+              totalAudioEnergy: totalAudioEnergy.toFixed(6),
+            })
           }
         } else if (lastBytes > 0) {
-          console.log("[v0] ⚠ Microphone NOT transmitting - bytes/packets not increasing")
+          console.log("[v0] ⚠️ Microphone NOT transmitting - bytes/packets not increasing")
         }
 
         lastBytes = currentBytes
         lastPackets = currentPackets
+        lastAudioEnergy = totalAudioEnergy
 
-        // Check again in 500ms
         if (this.peerConnection) {
           setTimeout(checkStats, 500)
         }
@@ -1008,7 +1043,6 @@ class CallClient {
       }
     }
 
-    // Start checking after 1 second
     setTimeout(checkStats, 1000)
   }
 

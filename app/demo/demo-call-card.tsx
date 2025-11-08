@@ -135,8 +135,11 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
     setAIIsProcessing(false)
   }
 
-  const handleForceResumeAudio = () => {
-    console.log("Force resume audio functionality needs to be implemented.")
+  const handleForceResumeAudio = async () => {
+    if (callClientRef.current) {
+      await callClientRef.current.forceResumeAudio()
+      console.log("[v0] Force resume audio triggered from UI")
+    }
   }
 
   const formatDuration = (seconds: number) => {
