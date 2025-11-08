@@ -26,6 +26,10 @@ class CallClient {
   private remoteAudioElement: HTMLAudioElement | null = null
   private callId: string | null = null
   private searchedQueries = new Set<string>()
+  private audioContext: AudioContext | null = null
+  private audioAnalyzer: AnalyserNode | null = null
+  private ringStartTime = 0
+  private minRingDuration = 5000 // 5 seconds minimum ring before stopping
 
   constructor(config: CallClientConfig) {
     this.config = config
@@ -62,15 +66,40 @@ class CallClient {
       })
 
       try {
+        this.audioContext = new AudioContext()
+        console.log("[v0] AudioContext created, state:", this.audioContext.state)
+
+        if (this.audioContext.state === "suspended") {
+          console.warn("[v0] AudioContext is suspended - may need user interaction")
+          // Try to resume AudioContext
+          await this.audioContext.resume()
+          console.log("[v0] AudioContext resumed, state:", this.audioContext.state)
+        }
+      } catch (err) {
+        console.error("[v0] Failed to create AudioContext:", err)
+      }
+
+      try {
         this.ringAudio = new Audio("https://hebbkx1anhila5yf.public.blob.vercel-storage.com/phone-ringing-382734-Dpm4XMvhZGxma3hoWloFLrI4kdq22a.mp3")
         this.ringAudio.loop = true
-        this.ringAudio.volume = 0.3 // Set volume to 30%
+        this.ringAudio.volume = 0.5 // Increased volume to 50%
+
+        this.ringStartTime = Date.now()
+
+        // Add load event listener
+        this.ringAudio.addEventListener("canplaythrough", () => {
+          console.log("[v0] Ring tone loaded and ready to play")
+        })
+
+        this.ringAudio.addEventListener("error", (err) => {
+          console.error("[v0] Ring tone error:", err)
+        })
 
         // Wait for audio to load before playing
         await this.ringAudio.play()
-        console.log("[v0] Ring tone playing")
+        console.log("[v0] Ring tone playing - should last 5-6 seconds")
       } catch (err) {
-        console.warn("[v0] Failed to play ring tone (not critical):", err)
+        console.warn("[v0] Failed to play ring tone:", err)
         // Continue without ring tone - not critical for functionality
       }
 
@@ -134,46 +163,78 @@ class CallClient {
 
       this.attachToolHandlers()
 
-      // ===== EXACT HANDLER THAT STOPS RING ON FIRST REMOTE AUDIO =====
+      // ===== ENHANCED HANDLER WITH RING DURATION CHECK =====
       // Listen for remote audio tracks
       this.peerConnection.addEventListener("track", (event) => {
         console.log("[v0] Received remote track:", event.track.kind)
 
         if (event.track.kind === "audio") {
-          // Stop ring tone on first remote audio
           if (!this.hasReceivedAudio) {
-            console.log("[v0] First remote audio received - stopping ring and starting timer")
-            this.hasReceivedAudio = true
+            const ringElapsed = Date.now() - this.ringStartTime
+            const remainingRing = Math.max(0, this.minRingDuration - ringElapsed)
 
-            // Stop ring tone
-            if (this.ringAudio) {
-              this.ringAudio.pause()
-              this.ringAudio = null
-            }
+            console.log(`[v0] First remote audio received after ${ringElapsed}ms ring`)
 
-            // Start timer
-            this.startTimer()
+            // Wait for remaining ring time before stopping
+            setTimeout(() => {
+              console.log("[v0] Ring duration met - stopping ring and starting timer")
+              this.hasReceivedAudio = true
 
-            // Update state to connected
-            this.config.onStateChange?.("connected")
+              // Stop ring tone
+              if (this.ringAudio) {
+                this.ringAudio.pause()
+                this.ringAudio = null
+              }
 
-            if (this.callId) {
-              fetch("/api/calls/events", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  call_id: this.callId,
-                  type: "first_ai_audio",
-                }),
-              }).catch((err) => console.error("[v0] Failed to log first_ai_audio event:", err))
-            }
+              // Start timer
+              this.startTimer()
+
+              // Update state to connected
+              this.config.onStateChange?.("connected")
+
+              if (this.callId) {
+                fetch("/api/calls/events", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    call_id: this.callId,
+                    type: "first_ai_audio",
+                  }),
+                }).catch((err) => console.error("[v0] Failed to log first_ai_audio event:", err))
+              }
+            }, remainingRing)
           }
 
           if (!this.remoteAudioElement) {
             this.remoteAudioElement = new Audio()
             this.remoteAudioElement.autoplay = true
-            this.remoteAudioElement.volume = 1.0 // Full volume
+            this.remoteAudioElement.volume = 1.0
             this.remoteAudioElement.srcObject = event.streams[0]
+
+            // Add comprehensive event listeners for diagnostics
+            this.remoteAudioElement.addEventListener("loadedmetadata", () => {
+              console.log("[v0] ✓ Remote audio metadata loaded")
+            })
+
+            this.remoteAudioElement.addEventListener("canplay", () => {
+              console.log("[v0] ✓ Remote audio can play")
+            })
+
+            this.remoteAudioElement.addEventListener("playing", () => {
+              console.log("[v0] ✓ Remote audio is PLAYING")
+            })
+
+            this.remoteAudioElement.addEventListener("pause", () => {
+              console.log("[v0] ⚠ Remote audio PAUSED")
+            })
+
+            this.remoteAudioElement.addEventListener("stalled", () => {
+              console.warn("[v0] ⚠ Remote audio STALLED")
+            })
+
+            this.remoteAudioElement.addEventListener("error", (err) => {
+              console.error("[v0] ✗ Remote audio ERROR:", err)
+            })
 
             // Attach to DOM body (hidden) to ensure browser allows playback
             this.remoteAudioElement.style.display = "none"
@@ -181,24 +242,45 @@ class CallClient {
 
             console.log("[v0] Remote audio element created and connected to stream")
 
-            // Explicitly call play() to ensure audio starts
             this.remoteAudioElement
               .play()
               .then(() => {
-                console.log("[v0] Remote audio is now PLAYING - you should hear the AI")
+                console.log("[v0] ✓ Remote audio play() succeeded")
+
+                // Check if actually playing
+                if (this.remoteAudioElement!.paused) {
+                  console.error("[v0] ✗ Audio element says paused=true even after play()")
+                  this.config.onError?.("Audio playback blocked. Click anywhere to enable sound.")
+                } else {
+                  console.log("[v0] ✓ Audio element paused=false, should be audible")
+                }
               })
               .catch((err) => {
-                console.error("[v0] Failed to play remote audio:", err)
-                this.config.onError?.("Failed to play AI audio. Please refresh and try again.")
+                console.error("[v0] ✗ Remote audio play() FAILED:", err)
+                if (err.name === "NotAllowedError") {
+                  this.config.onError?.("Audio blocked by browser. Click 'Unmute' to enable sound.")
+                } else {
+                  this.config.onError?.("Failed to play AI audio: " + err.message)
+                }
               })
 
-            this.remoteAudioElement.onerror = (err) => {
-              console.error("[v0] Remote audio playback error:", err)
+            if (this.audioContext && event.streams[0]) {
+              try {
+                const source = this.audioContext.createMediaStreamSource(event.streams[0])
+                this.audioAnalyzer = this.audioContext.createAnalyser()
+                this.audioAnalyzer.fftSize = 256
+                source.connect(this.audioAnalyzer)
+
+                // Monitor audio levels
+                this.monitorAudioLevels()
+              } catch (err) {
+                console.error("[v0] Failed to create audio analyzer:", err)
+              }
             }
           }
         }
       })
-      // ===== END HANDLER =====
+      // ===== END ENHANCED HANDLER =====
 
       // Handle ICE candidates
       this.peerConnection.addEventListener("icecandidate", (event) => {
@@ -346,6 +428,13 @@ class CallClient {
       }
       this.remoteAudioElement = null
     }
+
+    if (this.audioContext) {
+      this.audioContext.close()
+      this.audioContext = null
+    }
+
+    this.audioAnalyzer = null
 
     // Reset state
     this.hasReceivedAudio = false
@@ -576,6 +665,51 @@ class CallClient {
       name,
       output: JSON.stringify(output),
     })
+  }
+
+  private monitorAudioLevels(): void {
+    if (!this.audioAnalyzer) return
+
+    const dataArray = new Uint8Array(this.audioAnalyzer.frequencyBinCount)
+
+    const checkLevel = () => {
+      if (!this.audioAnalyzer || !this.remoteAudioElement) return
+
+      this.audioAnalyzer.getByteFrequencyData(dataArray)
+      const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length
+
+      if (average > 5) {
+        console.log(`[v0] ✓ Audio stream active, level: ${Math.round(average)}`)
+      } else {
+        console.log(`[v0] ⚠ Audio stream silent, level: ${Math.round(average)}`)
+      }
+
+      // Check again in 2 seconds if still connected
+      if (this.remoteAudioElement) {
+        setTimeout(checkLevel, 2000)
+      }
+    }
+
+    // Start monitoring after 1 second
+    setTimeout(checkLevel, 1000)
+  }
+
+  async forceResumeAudio(): Promise<void> {
+    console.log("[v0] Force resuming audio...")
+
+    if (this.audioContext && this.audioContext.state === "suspended") {
+      await this.audioContext.resume()
+      console.log("[v0] AudioContext resumed, state:", this.audioContext.state)
+    }
+
+    if (this.remoteAudioElement && this.remoteAudioElement.paused) {
+      try {
+        await this.remoteAudioElement.play()
+        console.log("[v0] Remote audio manually resumed")
+      } catch (err) {
+        console.error("[v0] Failed to manually resume audio:", err)
+      }
+    }
   }
 }
 

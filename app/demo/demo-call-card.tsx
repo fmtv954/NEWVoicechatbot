@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useRef } from "react"
-import { Phone, PhoneOff, AlertCircle, CheckCircle2 } from "lucide-react"
+import { Phone, PhoneOff, AlertCircle, CheckCircle2, Volume2 } from "lucide-react"
 import CallClient from "@/lib/callClient"
 import { DebugPanel } from "@/components/DebugPanel"
 import { AudioDiagnostics } from "@/components/AudioDiagnostics"
@@ -23,6 +23,7 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
   const [error, setError] = useState<string | null>(null)
   const [isRinging, setIsRinging] = useState(false)
   const [events, setEvents] = useState<MilestoneEvent[]>([])
+  const [showUnmuteButton, setShowUnmuteButton] = useState(false)
   const callClientRef = useRef<CallClient | null>(null)
 
   const isCallActive = callState === "ringing" || callState === "connecting" || callState === "connected"
@@ -31,6 +32,7 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
     setError(null)
     setIsRinging(true)
     setEvents([]) // Clear previous events
+    setShowUnmuteButton(false)
 
     const client = new CallClient({
       agentId,
@@ -39,6 +41,7 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
         setCallState(state)
         if (state === "connected") {
           setIsRinging(false)
+          setTimeout(() => setShowUnmuteButton(true), 2000)
         }
       },
       onDurationUpdate: (seconds) => {
@@ -48,6 +51,9 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
         setError(err)
         setCallState("idle")
         setIsRinging(false)
+        if (err.includes("blocked") || err.includes("Audio")) {
+          setShowUnmuteButton(true)
+        }
       },
       onEvent: (event) => {
         // Add event to debug panel
@@ -67,11 +73,13 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
     setCallState("idle")
     setCallDuration(0)
     setIsRinging(false)
+    setShowUnmuteButton(false)
   }
 
-  const handleInterrupt = () => {
+  const handleForceResumeAudio = async () => {
     if (callClientRef.current) {
-      callClientRef.current.interrupt()
+      await callClientRef.current.forceResumeAudio()
+      setError(null)
     }
   }
 
@@ -134,12 +142,19 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
             {isRinging && (
               <div className="flex items-center justify-center gap-2 text-blue-600 animate-pulse">
                 <div className="w-2 h-2 bg-blue-600 rounded-full" />
-                <span className="text-sm font-medium">Ringing...</span>
+                <span className="text-sm font-medium">Ringing... (wait 5-6 seconds)</span>
               </div>
             )}
 
             {callState === "connecting" && <p className="text-sm text-slate-500">Connecting...</p>}
-            {callState === "connected" && <p className="text-sm text-green-600 font-medium">Connected</p>}
+            {callState === "connected" && (
+              <div className="space-y-1">
+                <p className="text-sm text-green-600 font-medium">Connected</p>
+                <p className="text-xs text-slate-500">
+                  AI will greet you automatically - just listen and respond naturally
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Timer */}
@@ -170,12 +185,15 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
               </button>
             ) : (
               <>
-                <button
-                  onClick={handleInterrupt}
-                  className="w-full bg-orange-500 hover:bg-orange-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200 flex items-center justify-center gap-2 shadow-md hover:shadow-lg active:scale-95"
-                >
-                  Interrupt AI
-                </button>
+                {showUnmuteButton && (
+                  <button
+                    onClick={handleForceResumeAudio}
+                    className="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200 flex items-center justify-center gap-2 shadow-md hover:shadow-lg active:scale-95"
+                  >
+                    <Volume2 className="w-5 h-5" />
+                    Enable Audio (Click if you can't hear AI)
+                  </button>
+                )}
                 <button
                   onClick={handleEndCall}
                   className="w-full bg-red-500 hover:bg-red-600 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-200 flex items-center justify-center gap-2 shadow-lg hover:shadow-xl active:scale-95"
@@ -191,28 +209,34 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
           <div className="mt-8 bg-amber-50 border border-amber-200 rounded-lg p-4">
             <h3 className="text-sm font-semibold text-amber-900 mb-3 flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4" />
-              Test Checklist
+              Test Scenarios
             </h3>
             <ul className="space-y-2 text-sm text-amber-800">
               <li className="flex items-start gap-2">
                 <span className="text-amber-600">1.</span>
                 <span>
-                  Say <strong>"spell my name"</strong> - tests basic conversation
+                  Wait for AI greeting, then say <strong>"spell my name"</strong> - tests natural conversation
                 </span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-amber-600">2.</span>
                 <span>
-                  Ask <strong>"check pricing"</strong> - forces Tavily web search
+                  Ask <strong>"what's the pricing?"</strong> - triggers web search with Tavily
                 </span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-amber-600">3.</span>
                 <span>
-                  Say <strong>"connect me to a human"</strong> - triggers handoff flow
+                  Say <strong>"I need to speak with someone"</strong> - initiates handoff to human agent
                 </span>
               </li>
             </ul>
+            <div className="mt-3 pt-3 border-t border-amber-200">
+              <p className="text-xs text-amber-700">
+                <strong>Tip:</strong> The AI uses Voice Activity Detection (VAD) - just speak naturally and it will
+                respond. You can talk over the AI anytime (barge-in).
+              </p>
+            </div>
           </div>
         </div>
 
