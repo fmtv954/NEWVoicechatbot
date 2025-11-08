@@ -17,6 +17,7 @@ type CallClientConfig = {
   onAudioFormat?: (format: { codec?: string; sampleRate?: number; channels?: number }) => void
   onMicrophoneLevel?: (level: number) => void
   onAIProcessing?: (isProcessing: boolean) => void
+  onAIResponded?: (hasResponded: boolean) => void
 }
 
 class CallClient {
@@ -43,6 +44,7 @@ class CallClient {
   private aiIsProcessing = false
   private microphoneAnalyzer: AnalyserNode | null = null
   private lastMicrophoneLevel = 0
+  private aiHasResponded = false
 
   constructor(config: CallClientConfig) {
     this.config = config
@@ -149,7 +151,9 @@ class CallClient {
       }
 
       try {
-        this.ringAudio = new Audio("https://hebbkx1anhila5yf.public.blob.vercel-storage.com/phone-ringing-382734-Dpm4XMvhZGxma3hoWloFLrI4kdq22a.mp3")
+        this.ringAudio = new Audio(
+          "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/phone-ringing-382734-Dpm4XMvhZGxma3hoWloFLrI4kdq22a.mp3",
+        )
         this.ringAudio.loop = true
         this.ringAudio.volume = 0.5 // Increased volume to 50%
 
@@ -557,6 +561,7 @@ class CallClient {
     this.greetingSent = false
     this.aiIsProcessing = false
     this.lastMicrophoneLevel = 0
+    this.aiHasResponded = false
   }
 
   /**
@@ -607,6 +612,13 @@ class CallClient {
           if (!this.aiIsSpeaking) {
             this.aiIsSpeaking = true
             console.log("[v0] 🎤 AI Started Speaking")
+            if (!this.aiHasResponded) {
+              this.aiHasResponded = true
+              console.log("[v0] ✅ AI HAS RESPONDED (first time)!")
+              if (this.config.onAIResponded) {
+                this.config.onAIResponded(true)
+              }
+            }
             this.updateDiagnostics()
           }
         }

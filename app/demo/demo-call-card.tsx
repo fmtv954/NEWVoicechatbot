@@ -44,6 +44,7 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
   const [showMicDialog, setShowMicDialog] = useState(false)
   const [micStream, setMicStream] = useState<MediaStream | null>(null)
   const callClientRef = useRef<CallClient | null>(null)
+  const [aiHasResponded, setAIHasResponded] = useState(false)
 
   const isCallActive = callState === "ringing" || callState === "connecting" || callState === "connected"
 
@@ -72,6 +73,7 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
     setAudioFormat({})
     setMicrophoneLevel(0)
     setAIIsProcessing(false)
+    setAIHasResponded(false)
 
     const client = new CallClient({
       agentId,
@@ -110,6 +112,9 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
       onAIProcessing: (isProcessing) => {
         setAIIsProcessing(isProcessing)
       },
+      onAIResponded: (hasResponded) => {
+        setAIHasResponded(hasResponded)
+      },
     })
 
     callClientRef.current = client
@@ -133,6 +138,7 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
     setAudioFormat({})
     setMicrophoneLevel(0)
     setAIIsProcessing(false)
+    setAIHasResponded(false)
   }
 
   const handleForceResumeAudio = async () => {
@@ -302,16 +308,16 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Radio
-                    className={`w-4 h-4 ${aiStatus.isSpeaking ? "text-green-600 animate-pulse" : "text-slate-400"}`}
+                    className={`w-4 h-4 ${aiHasResponded ? "text-green-600" : "text-slate-400"} ${aiStatus.isSpeaking ? "animate-pulse" : ""}`}
                   />
                   <span className="text-sm font-medium text-slate-700">AI Responded</span>
                 </div>
                 <span
                   className={`text-xs font-semibold px-2 py-1 rounded ${
-                    aiStatus.isSpeaking ? "bg-green-100 text-green-700" : "bg-slate-200 text-slate-600"
+                    aiHasResponded ? "bg-green-100 text-green-700" : "bg-slate-200 text-slate-600"
                   }`}
                 >
-                  {aiStatus.isSpeaking ? "YES" : "NO"}
+                  {aiHasResponded ? "YES" : "NO"}
                 </span>
               </div>
 
