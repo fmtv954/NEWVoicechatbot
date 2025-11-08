@@ -12,7 +12,7 @@ export type CallEventType =
   | "tool_result_returned"
   | "lead_saved"
   | "handoff_requested"
-  | "sms_sent"
+  | "slack_notification_sent" // Replaced sms_sent with slack_notification_sent
   | "handoff_accepted"
   | "handoff_timeout"
   | "call_ended"

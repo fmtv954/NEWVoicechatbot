@@ -102,7 +102,7 @@ export function DebugPanel({ events, transcript, maxEvents = 15 }: DebugPanelPro
       case "lead_saved":
         return "text-purple-600"
       case "handoff_requested":
-      case "sms_sent":
+      case "slack_notification_sent": // Replaced sms_sent with slack_notification_sent
         return "text-red-600"
       case "handoff_accepted":
         return "text-teal-600"

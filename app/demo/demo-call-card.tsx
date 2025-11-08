@@ -6,6 +6,7 @@ import CallClient from "@/lib/callClient"
 import { DebugPanel } from "@/components/DebugPanel"
 import { AudioDiagnostics } from "@/components/AudioDiagnostics"
 import { MicPermissionDialog } from "@/components/MicPermissionDialog"
+import { LiveTranscriptPanel } from "@/components/LiveTranscriptPanel"
 
 interface DemoCallCardProps {
   campaignId: string
@@ -30,6 +31,27 @@ interface AudioFormat {
   channels?: number
 }
 
+interface TranscriptEntry {
+  timestamp: number
+  speaker: "user" | "ai"
+  text: string
+}
+
+interface LeadData {
+  first_name?: string
+  last_name?: string
+  email?: string
+  phone?: string
+  reason?: string
+}
+
+interface HandoffData {
+  sent: boolean
+  reason?: string
+  slackMessage?: string
+  timestamp?: number
+}
+
 export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps) {
   const [callState, setCallState] = useState<"idle" | "ringing" | "connecting" | "connected" | "ended">("idle")
   const [callDuration, setCallDuration] = useState(0)
@@ -45,11 +67,17 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
   const [micStream, setMicStream] = useState<MediaStream | null>(null)
   const callClientRef = useRef<CallClient | null>(null)
   const [aiHasResponded, setAIHasResponded] = useState(false)
+  const [transcript, setTranscript] = useState<TranscriptEntry[]>([])
+  const [leadData, setLeadData] = useState<LeadData>({})
+  const [handoffData, setHandoffData] = useState<HandoffData>({ sent: false })
 
   const isCallActive = callState === "ringing" || callState === "connecting" || callState === "connected"
 
   const handleStartCall = async () => {
     setError(null)
+    setTranscript([])
+    setLeadData({})
+    setHandoffData({ sent: false })
     setShowMicDialog(true)
   }
 
@@ -99,6 +127,30 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
       },
       onEvent: (event) => {
         setEvents((prev) => [...prev, event].slice(-15))
+
+        if (event.type === "transcript") {
+          setTranscript((prev) => [
+            ...prev,
+            {
+              timestamp: event.timestamp,
+              speaker: event.payload.speaker,
+              text: event.payload.text,
+            },
+          ])
+        }
+
+        if (event.type === "lead_saved") {
+          setLeadData(event.payload.leadData || {})
+        }
+
+        if (event.type === "handoff_requested") {
+          setHandoffData({
+            sent: true,
+            reason: event.payload.reason,
+            slackMessage: event.payload.slackMessage,
+            timestamp: event.timestamp,
+          })
+        }
       },
       onAIStatus: (status) => {
         setAIStatus(status)
@@ -445,6 +497,12 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
       </div>
 
       <AudioDiagnostics />
+
+      {callState !== "idle" && (
+        <div className="mt-6">
+          <LiveTranscriptPanel transcript={transcript} leadData={leadData} handoffData={handoffData} />
+        </div>
+      )}
     </>
   )
 }

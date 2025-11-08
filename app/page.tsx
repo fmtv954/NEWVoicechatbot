@@ -29,7 +29,7 @@ export default function HomePage() {
               </li>
               <li className="flex items-start">
                 <span className="text-blue-600 mr-2">✓</span>
-                Human handoff via SMS + LiveKit
+                Human handoff via Slack + LiveKit
               </li>
               <li className="flex items-start">
                 <span className="text-blue-600 mr-2">✓</span>

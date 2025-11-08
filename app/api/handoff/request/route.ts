@@ -1,20 +1,35 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabaseAdmin"
-import { sendSMS } from "@/lib/sms"
+import { sendSlackNotification } from "@/lib/slack"
 import jwt from "jsonwebtoken"
 import { pushEvent } from "@/lib/calls"
 
 export async function POST(request: NextRequest) {
+  console.log("=".repeat(80))
+  console.log("[Handoff] 🚨 NEW HANDOFF REQUEST RECEIVED")
+  console.log("[Handoff] Timestamp:", new Date().toISOString())
+  console.log("=".repeat(80))
+
   try {
     const body = await request.json()
+    console.log("[Handoff] 📦 Request body:", JSON.stringify(body, null, 2))
+
     const { agent_id, campaign_id, call_id, reason } = body
 
     // Validate required fields
     if (!agent_id || !campaign_id || !reason) {
+      console.error("[Handoff] ❌ Missing required fields:", { agent_id, campaign_id, reason })
       return NextResponse.json({ error: "Missing required fields: agent_id, campaign_id, reason" }, { status: 400 })
     }
 
+    console.log("[Handoff] ✓ Required fields validated")
+    console.log("[Handoff] - Agent ID:", agent_id)
+    console.log("[Handoff] - Campaign ID:", campaign_id)
+    console.log("[Handoff] - Call ID:", call_id || "No call ID provided")
+    console.log("[Handoff] - Reason:", reason)
+
     // Get campaign details
+    console.log("[Handoff] 🔍 Fetching campaign details...")
     const { data: campaign, error: campaignError } = await supabaseAdmin
       .from("campaigns")
       .select("name")
@@ -22,11 +37,15 @@ export async function POST(request: NextRequest) {
       .single()
 
     if (campaignError || !campaign) {
+      console.error("[Handoff] ❌ Campaign not found:", campaignError)
       return NextResponse.json({ error: "Campaign not found" }, { status: 404 })
     }
 
+    console.log("[Handoff] ✓ Campaign found:", campaign.name)
+
     let leadInfo: { first_name?: string; last_name?: string; email?: string; phone?: string } | null = null
     if (call_id) {
+      console.log("[Handoff] 🔍 Fetching lead information for call...")
       const { data: lead } = await supabaseAdmin
         .from("leads")
         .select("first_name, last_name, email, phone")
@@ -37,11 +56,21 @@ export async function POST(request: NextRequest) {
 
       if (lead) {
         leadInfo = lead
+        console.log("[Handoff] ✓ Lead info found:", {
+          name: [lead.first_name, lead.last_name].filter(Boolean).join(" "),
+          email: lead.email,
+          phone: lead.phone,
+        })
+      } else {
+        console.log("[Handoff] ⚠ No lead info found for this call")
       }
     }
 
     // Create handoff ticket (expires in 10 minutes)
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000)
+    console.log("[Handoff] 🎫 Creating handoff ticket...")
+    console.log("[Handoff] - Expires at:", expiresAt.toISOString())
+
     const { data: ticket, error: ticketError } = await supabaseAdmin
       .from("handoff_tickets")
       .insert({
@@ -56,11 +85,19 @@ export async function POST(request: NextRequest) {
       .single()
 
     if (ticketError || !ticket) {
-      console.error("[Handoff] Failed to create ticket:", ticketError)
-      return NextResponse.json({ error: "Failed to create handoff ticket" }, { status: 500 })
+      console.error("[Handoff] ❌ Failed to create ticket:", ticketError)
+      return NextResponse.json(
+        { error: "Failed to create handoff ticket", details: ticketError?.message },
+        { status: 500 },
+      )
     }
 
+    console.log("[Handoff] ✅ Ticket created successfully!")
+    console.log("[Handoff] - Ticket ID:", ticket.id)
+    console.log("[Handoff] - Status:", ticket.status)
+
     if (call_id) {
+      console.log("[Handoff] 📝 Logging handoff_requested event...")
       await pushEvent({
         call_id,
         type: "handoff_requested",
@@ -69,15 +106,17 @@ export async function POST(request: NextRequest) {
           reason,
         },
       })
+      console.log("[Handoff] ✓ Event logged")
     }
 
     // Mint one-time JWT token
     const jwtSecret = process.env.JWT_SECRET
     if (!jwtSecret) {
-      console.error("[Handoff] JWT_SECRET not configured")
-      return NextResponse.json({ error: "Server configuration error" }, { status: 500 })
+      console.error("[Handoff] ❌ JWT_SECRET not configured")
+      return NextResponse.json({ error: "Server configuration error: JWT_SECRET missing" }, { status: 500 })
     }
 
+    console.log("[Handoff] 🔐 Generating JWT token...")
     const token = jwt.sign(
       {
         ticket_id: ticket.id,
@@ -86,99 +125,91 @@ export async function POST(request: NextRequest) {
       },
       jwtSecret,
     )
-
-    // Get all on-call agent contacts
-    const { data: contacts, error: contactsError } = await supabaseAdmin
-      .from("agent_contacts")
-      .select("phone_e164")
-      .eq("agent_id", agent_id)
-      .eq("is_on_call", true)
-
-    if (contactsError || !contacts || contacts.length === 0) {
-      console.warn("[Handoff] No on-call contacts found for agent:", agent_id)
-      return NextResponse.json({ error: "No on-call agents available" }, { status: 503 })
-    }
+    console.log("[Handoff] ✓ JWT token generated (length:", token.length, ")")
 
     const publicBaseUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"
     const acceptUrl = `${publicBaseUrl}/agent/accept?token=${token}`
+    console.log("[Handoff] 🔗 Accept URL:", acceptUrl)
 
-    let smsBody = `URGENT: Visitor needs help (Campaign: ${campaign.name})\n`
+    const customerName =
+      leadInfo && (leadInfo.first_name || leadInfo.last_name)
+        ? [leadInfo.first_name, leadInfo.last_name].filter(Boolean).join(" ")
+        : undefined
 
-    if (leadInfo && (leadInfo.first_name || leadInfo.last_name || leadInfo.email || leadInfo.phone)) {
-      const customerName = [leadInfo.first_name, leadInfo.last_name].filter(Boolean).join(" ") || "Unknown"
-      const customerPhone = leadInfo.phone || "N/A"
-      const customerEmail = leadInfo.email || "N/A"
+    console.log("[Handoff] 📧 Preparing Slack notification...")
+    console.log("[Handoff] - Campaign:", campaign.name)
+    console.log("[Handoff] - Customer:", customerName || "Anonymous")
+    console.log("[Handoff] - Reason:", reason)
+    console.log("[Handoff] - Has lead data:", !!leadInfo)
 
-      smsBody += `Customer: ${customerName}  Phone: ${customerPhone}  Email: ${customerEmail}\n`
+    const slackWebhook = process.env.SLACK_WEBHOOK_URL
+    if (!slackWebhook) {
+      console.error("[Handoff] ❌ SLACK_WEBHOOK_URL not configured")
+      return NextResponse.json({ error: "Server configuration error: SLACK_WEBHOOK_URL missing" }, { status: 500 })
     }
 
-    smsBody += `Reason: ${reason}\n`
-    smsBody += `Join: ${acceptUrl}\n`
-    smsBody += `Reply STOP to stop, HELP for help.`
+    const slackResult = await sendSlackNotification({
+      campaignName: campaign.name,
+      customerName,
+      customerPhone: leadInfo?.phone,
+      customerEmail: leadInfo?.email,
+      reason,
+      acceptUrl,
+      ticketId: ticket.id,
+    })
 
-    // Check if Twilio is configured
-    const twilioConfigured =
-      process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER
+    if (slackResult.success) {
+      console.log("[Handoff] ✅ Slack notification sent successfully!")
 
-    if (!twilioConfigured) {
-      console.warn("[Handoff] Twilio not configured - SMS disabled")
-      // Still create the ticket but don't send SMS
-      return NextResponse.json({
-        ok: true,
-        ticket_id: ticket.id,
-        warning: "SMS notifications disabled - Twilio not configured",
-      })
-    }
-
-    const smsResults = []
-    for (const contact of contacts) {
-      try {
-        const result = await sendSMS({
-          to: contact.phone_e164,
-          body: smsBody,
-        })
-
-        // Log SMS message
-        await supabaseAdmin.from("sms_messages").insert({
-          ticket_id: ticket.id,
-          to_number: contact.phone_e164,
-          body: smsBody,
-          provider_message_id: result.sid,
-          status: result.status,
-        })
-
-        if (call_id) {
-          await pushEvent({
-            call_id,
-            type: "sms_sent",
-            payload: {
-              to_number: contact.phone_e164,
-              sms_id: result.sid,
-            },
-          })
-        }
-
-        smsResults.push({ to: contact.phone_e164, sid: result.sid, status: result.status })
-      } catch (error) {
-        console.error(`[Handoff] Failed to send SMS to ${contact.phone_e164}:`, error)
-        // Log failed SMS
-        await supabaseAdmin.from("sms_messages").insert({
-          ticket_id: ticket.id,
-          to_number: contact.phone_e164,
-          body: smsBody,
-          provider_message_id: null,
-          status: "failed",
+      if (call_id) {
+        console.log("[Handoff] 📝 Logging slack_notification_sent event...")
+        await pushEvent({
+          call_id,
+          type: "slack_notification_sent",
+          payload: {
+            ticket_id: ticket.id,
+          },
         })
       }
+    } else {
+      console.error("[Handoff] ❌ Slack notification failed:", slackResult.error)
+      return NextResponse.json(
+        {
+          error: "Failed to send Slack notification",
+          details: slackResult.error,
+          ticket_id: ticket.id,
+        },
+        { status: 500 },
+      )
     }
+
+    console.log("=".repeat(80))
+    console.log("[Handoff] ✅ HANDOFF REQUEST COMPLETED SUCCESSFULLY")
+    console.log("[Handoff] Summary:")
+    console.log("[Handoff] - Ticket ID:", ticket.id)
+    console.log("[Handoff] - Notification sent:", slackResult.success)
+    console.log("[Handoff] - Accept URL ready for agent")
+    console.log("=".repeat(80))
 
     return NextResponse.json({
       ok: true,
       ticket_id: ticket.id,
-      sms_sent: smsResults.length,
+      notification_sent: slackResult.success,
+      slackMessage: slackResult.formattedMessage,
     })
   } catch (error) {
-    console.error("[Handoff] Request failed:", error)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+    console.error("=".repeat(80))
+    console.error("[Handoff] ❌ REQUEST FAILED WITH ERROR")
+    console.error("[Handoff] Error:", error)
+    console.error("[Handoff] Stack:", error instanceof Error ? error.stack : "No stack trace")
+    console.error("=".repeat(80))
+
+    return NextResponse.json(
+      {
+        error: "Internal server error",
+        message: error instanceof Error ? error.message : "Unknown error",
+      },
+      { status: 500 },
+    )
   }
 }

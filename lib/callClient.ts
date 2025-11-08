@@ -18,6 +18,7 @@ type CallClientConfig = {
   onMicrophoneLevel?: (level: number) => void
   onAIProcessing?: (isProcessing: boolean) => void
   onAIResponded?: (hasResponded: boolean) => void
+  onTranscript?: (transcript: { speaker: string; text: string }) => void
 }
 
 class CallClient {
@@ -679,6 +680,22 @@ class CallClient {
           }
         }
 
+        if (message.type === "conversation.item.input_audio_transcription.completed") {
+          const transcript = message.transcript || ""
+          console.log("[v0] 🎤 User said:", transcript)
+          this.emit("transcript", { speaker: "user", text: transcript })
+        }
+
+        if (message.type === "response.output_item.done") {
+          if (message.item?.type === "message" && message.item?.content) {
+            const content = message.item.content.find((c: any) => c.type === "text")
+            if (content && content.text) {
+              console.log("[v0] 🤖 AI said:", content.text)
+              this.emit("transcript", { speaker: "ai", text: content.text })
+            }
+          }
+        }
+
         // Listen for function_call_arguments.done event
         if (message.type === "response.function_call_arguments.done") {
           const { call_id, name, arguments: argsString } = message
@@ -780,7 +797,18 @@ class CallClient {
     }
 
     const result = await response.json()
-    this.emit("lead_saved", { lead_id: result.lead_id })
+
+    this.emit("lead_saved", {
+      lead_id: result.lead_id,
+      leadData: {
+        first_name: args.first_name,
+        last_name: args.last_name,
+        email: args.email,
+        phone: args.phone,
+        reason: args.reason,
+      },
+    })
+
     return { ok: true, lead_id: result.lead_id }
   }
 
@@ -835,25 +863,58 @@ class CallClient {
    * Tool: requestHandoff - Request handoff to human agent
    */
   private async toolRequestHandoff(args: any): Promise<any> {
-    const response = await fetch("/api/handoff/request", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        agent_id: this.config.agentId,
-        campaign_id: this.config.campaignId,
-        call_id: this.callId,
+    console.log("[v0] 🚨 REQUEST HANDOFF TRIGGERED")
+    console.log("[v0] - Agent ID:", this.config.agentId)
+    console.log("[v0] - Campaign ID:", this.config.campaignId)
+    console.log("[v0] - Call ID:", this.callId)
+    console.log("[v0] - Reason:", args.reason)
+
+    let response: Response
+    try {
+      response = await fetch("/api/handoff/request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agent_id: this.config.agentId,
+          campaign_id: this.config.campaignId,
+          call_id: this.callId,
+          reason: args.reason,
+        }),
+      })
+
+      console.log("[v0] 📥 Handoff response status:", response.status)
+      console.log("[v0] 📥 Response content-type:", response.headers.get("content-type"))
+
+      if (!response.ok) {
+        let errorData: any
+        const contentType = response.headers.get("content-type")
+
+        if (contentType && contentType.includes("application/json")) {
+          errorData = await response.json()
+        } else {
+          const errorText = await response.text()
+          console.error("[v0] ❌ Handoff request failed with plain text error:", errorText)
+          throw new Error(errorText || "Failed to request handoff")
+        }
+
+        console.error("[v0] ❌ Handoff request failed:", errorData)
+        throw new Error(errorData.error || "Failed to request handoff")
+      }
+
+      const result = await response.json()
+      console.log("[v0] ✅ Handoff request successful:", result)
+
+      this.emit("handoff_requested", {
+        ticket_id: result.ticket_id,
         reason: args.reason,
-      }),
-    })
+        slackMessage: result.slackMessage,
+      })
 
-    if (!response.ok) {
-      const errorData = await response.json()
-      throw new Error(errorData.error || "Failed to request handoff")
+      return { ok: true, ticket_id: result.ticket_id }
+    } catch (error) {
+      console.error("[v0] ❌ Handoff tool exception:", error)
+      throw error
     }
-
-    const result = await response.json()
-    this.emit("handoff_requested", { ticket_id: result.ticket_id })
-    return { ok: true, ticket_id: result.ticket_id }
   }
 
   /**
