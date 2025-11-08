@@ -155,7 +155,7 @@ curl -X POST http://localhost:3000/api/campaigns \
 **Files:**
 - `/lib/callClient.ts`
 - `/app/api/session/route.ts`
-- `/public/ring.mp3`
+- `/publichttps://hebbkx1anhila5yf.public.blob.vercel-storage.com/phone-ringing-382734-Dpm4XMvhZGxma3hoWloFLrI4kdq22a.mp3`
 
 **Security:**
 - IP-based rate limiting (10 requests/minute)

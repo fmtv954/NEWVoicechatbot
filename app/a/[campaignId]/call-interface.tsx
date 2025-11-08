@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useRef } from "react"
-import { Phone, PhoneOff } from "lucide-react"
+import { Phone, PhoneOff, Volume2, AlertCircle } from "lucide-react"
 import CallClient from "@/lib/callClient"
 
 interface CallInterfaceProps {
@@ -13,18 +13,23 @@ export default function CallInterface({ campaignId, agentId }: CallInterfaceProp
   const [callState, setCallState] = useState<"idle" | "ringing" | "connecting" | "connected" | "ended">("idle")
   const [callDuration, setCallDuration] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [hasReceivedAudio, setHasReceivedAudio] = useState(false)
   const callClientRef = useRef<CallClient | null>(null)
 
   const isCallActive = callState === "ringing" || callState === "connecting" || callState === "connected"
 
   const handleStartCall = async () => {
     setError(null)
+    setHasReceivedAudio(false)
 
     const client = new CallClient({
       agentId,
       campaignId,
       onStateChange: (state) => {
         setCallState(state)
+        if (state === "connected") {
+          setHasReceivedAudio(true)
+        }
       },
       onDurationUpdate: (seconds) => {
         setCallDuration(seconds)
@@ -46,6 +51,7 @@ export default function CallInterface({ campaignId, agentId }: CallInterfaceProp
     }
     setCallState("idle")
     setCallDuration(0)
+    setHasReceivedAudio(false)
   }
 
   const handleInterrupt = () => {
@@ -80,6 +86,22 @@ export default function CallInterface({ campaignId, agentId }: CallInterfaceProp
         <p className="text-sm text-blue-700">Transcripts only; no audio recorded.</p>
       </div>
 
+      {callState === "connected" && hasReceivedAudio && (
+        <div className="w-full bg-green-50 border border-green-200 rounded-lg p-3 flex items-start gap-3">
+          <Volume2 className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-green-700 space-y-1">
+            <p className="font-semibold">Audio connected! If you can't hear the AI:</p>
+            <ul className="list-disc list-inside space-y-1 text-xs">
+              <li>Check your device volume is turned up</li>
+              <li>Check browser tab is not muted (look for speaker icon on tab)</li>
+              <li>Wait 2-3 seconds for AI to start speaking</li>
+              <li>Try clicking "Interrupt" then wait again</li>
+              <li>Check browser console (F12) for audio errors</li>
+            </ul>
+          </div>
+        </div>
+      )}
+
       {/* Caller ID */}
       <div className="text-center space-y-2">
         <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center mx-auto shadow-lg">
@@ -96,7 +118,8 @@ export default function CallInterface({ campaignId, agentId }: CallInterfaceProp
 
       {/* Error message */}
       {error && (
-        <div className="w-full bg-red-50 border border-red-200 rounded-lg p-3">
+        <div className="w-full bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2">
+          <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
           <p className="text-sm text-red-700">{error}</p>
         </div>
       )}
@@ -114,6 +137,11 @@ export default function CallInterface({ campaignId, agentId }: CallInterfaceProp
           </button>
         ) : (
           <>
+            {callState === "connected" && (
+              <p className="text-xs text-center text-slate-500 italic">
+                Click "Interrupt" if the AI is speaking and you want to talk
+              </p>
+            )}
             <button
               onClick={handleInterrupt}
               className="w-full bg-orange-500 hover:bg-orange-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200 flex items-center justify-center gap-2 shadow-md hover:shadow-lg active:scale-95"

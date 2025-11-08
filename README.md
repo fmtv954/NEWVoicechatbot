@@ -96,6 +96,50 @@ This project uses Husky and lint-staged for pre-commit hooks:
 - Automatically runs linting and type checking on staged files
 - Formats code with Prettier before commit
 
+### Smoke Test
+
+After completing a test run, verify performance metrics and event completeness:
+
+#### 1. Run Performance Queries
+
+Open Supabase SQL Editor and run queries from `scripts/queries.md`:
+
+\`\`\`bash
+# View queries in your editor
+cat scripts/queries.md
+
+# Or open in Supabase dashboard
+https://supabase.com/dashboard/project/[your-project]/sql
+\`\`\`
+
+#### 2. Verify Metrics
+
+Copy p95 results and paste below:
+
+\`\`\`
+Performance Metrics (Last Test):
+- First AI Audio: p95 = ___ ms (target ≤1000ms)
+- Tool Execution:
+  - saveLead: p95 = ___ ms (target ≤500ms)
+  - searchWeb: p95 = ___ ms (target ≤3000ms)
+  - requestHandoff: p95 = ___ ms (target ≤2000ms)
+- Call Completion: ___/10 (___%)
+- Lead Capture: ___/10 (___%)
+- Handoff Acceptance: ___/___ (___%)
+\`\`\`
+
+#### 3. Check Event Completeness
+
+Run the "Last 10 Calls" query from `scripts/queries.md` to verify all events logged correctly.
+
+**Healthy calls should have:**
+- `started = 1`
+- `first_audio = 1`
+- `function_calls = tool_results`
+- `ended = 1`
+
+See `docs/SMOKE_TEST.md` for full test procedures and acceptance criteria.
+
 ## Project Structure
 
 \`\`\`

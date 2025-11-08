@@ -11,6 +11,7 @@ type CallClientConfig = {
   onDurationUpdate?: (seconds: number) => void
   onError?: (error: string) => void
   onCallStarted?: (callId: string) => void
+  onEvent?: (event: { type: string; timestamp: number; payload?: any }) => void
 }
 
 class CallClient {
@@ -31,11 +32,25 @@ class CallClient {
   }
 
   /**
+   * Emit a milestone event to subscribers
+   */
+  private emit(type: string, payload?: any): void {
+    if (this.config.onEvent) {
+      this.config.onEvent({
+        type,
+        timestamp: Date.now(),
+        payload,
+      })
+    }
+  }
+
+  /**
    * Start the call: getUserMedia, play ring, create session, establish WebRTC
    */
   async start(): Promise<void> {
     try {
       this.config.onStateChange?.("ringing")
+      this.emit("ringing")
 
       // Get user microphone with echo cancellation, noise suppression, and auto gain control
       this.localStream = await navigator.mediaDevices.getUserMedia({
@@ -46,15 +61,23 @@ class CallClient {
         },
       })
 
-      // Play ring.mp3 immediately
-      this.ringAudio = new Audio("/ring.mp3")
-      this.ringAudio.loop = true
-      this.ringAudio.play().catch((err) => {
-        console.error("[v0] Failed to play ring tone:", err)
-      })
+      try {
+        this.ringAudio = new Audio("https://hebbkx1anhila5yf.public.blob.vercel-storage.com/phone-ringing-382734-Dpm4XMvhZGxma3hoWloFLrI4kdq22a.mp3")
+        this.ringAudio.loop = true
+        this.ringAudio.volume = 0.3 // Set volume to 30%
+
+        // Wait for audio to load before playing
+        await this.ringAudio.play()
+        console.log("[v0] Ring tone playing")
+      } catch (err) {
+        console.warn("[v0] Failed to play ring tone (not critical):", err)
+        // Continue without ring tone - not critical for functionality
+      }
 
       // POST /api/session to get session credentials
       this.config.onStateChange?.("connecting")
+      // Emit connecting event
+      this.emit("connecting")
       const sessionResponse = await fetch("/api/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -72,6 +95,7 @@ class CallClient {
       const { callId, sessionClientSecret, rtcConfiguration } = await sessionResponse.json()
       this.callId = callId
       this.config.onCallStarted?.(callId)
+      this.emit("call_started", { callId })
 
       // Create RTCPeerConnection
       this.peerConnection = new RTCPeerConnection(rtcConfiguration)
@@ -85,6 +109,7 @@ class CallClient {
       this.dataChannel = this.peerConnection.createDataChannel("oai-events")
       this.dataChannel.addEventListener("open", () => {
         console.log("[v0] Data channel opened")
+        this.emit("data_channel_open")
         // Send session update with ephemeral key
         this.sendRealtimeEvent({
           type: "session.update",
@@ -144,11 +169,32 @@ class CallClient {
             }
           }
 
-          // Play remote audio
           if (!this.remoteAudioElement) {
             this.remoteAudioElement = new Audio()
             this.remoteAudioElement.autoplay = true
+            this.remoteAudioElement.volume = 1.0 // Full volume
             this.remoteAudioElement.srcObject = event.streams[0]
+
+            // Attach to DOM body (hidden) to ensure browser allows playback
+            this.remoteAudioElement.style.display = "none"
+            document.body.appendChild(this.remoteAudioElement)
+
+            console.log("[v0] Remote audio element created and connected to stream")
+
+            // Explicitly call play() to ensure audio starts
+            this.remoteAudioElement
+              .play()
+              .then(() => {
+                console.log("[v0] Remote audio is now PLAYING - you should hear the AI")
+              })
+              .catch((err) => {
+                console.error("[v0] Failed to play remote audio:", err)
+                this.config.onError?.("Failed to play AI audio. Please refresh and try again.")
+              })
+
+            this.remoteAudioElement.onerror = (err) => {
+              console.error("[v0] Remote audio playback error:", err)
+            }
           }
         }
       })
@@ -198,6 +244,7 @@ class CallClient {
    */
   interrupt(): void {
     console.log("[v0] Interrupting AI")
+    this.emit("barge_in")
 
     if (this.callId) {
       fetch("/api/calls/events", {
@@ -239,6 +286,7 @@ class CallClient {
 
     if (this.callId && this.startTime > 0) {
       const durationSeconds = Math.floor((Date.now() - this.startTime) / 1000)
+      this.emit("call_ended", { duration_seconds: durationSeconds })
       fetch("/api/calls/events", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -292,6 +340,10 @@ class CallClient {
     if (this.remoteAudioElement) {
       this.remoteAudioElement.pause()
       this.remoteAudioElement.srcObject = null
+      // Remove from DOM
+      if (this.remoteAudioElement.parentNode) {
+        this.remoteAudioElement.parentNode.removeChild(this.remoteAudioElement)
+      }
       this.remoteAudioElement = null
     }
 
@@ -306,6 +358,7 @@ class CallClient {
    */
   private startTimer(): void {
     this.startTime = Date.now()
+    this.emit("first_ai_audio")
     this.timerInterval = setInterval(() => {
       const elapsed = Math.floor((Date.now() - this.startTime) / 1000)
       this.config.onDurationUpdate?.(elapsed)
@@ -369,18 +422,7 @@ class CallClient {
    */
   private async runTool(name: string, args: any): Promise<any> {
     console.log(`[v0] Running tool: ${name}`, args)
-
-    if (this.callId) {
-      fetch("/api/calls/events", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          call_id: this.callId,
-          type: "function_call_invoked",
-          payload: { name },
-        }),
-      }).catch((err) => console.error("[v0] Failed to log function_call_invoked event:", err))
-    }
+    this.emit("function_call_invoked", { name, args })
 
     try {
       let result: any
@@ -403,33 +445,17 @@ class CallClient {
           result = { error: `Unknown tool: ${name}` }
       }
 
-      if (this.callId) {
-        fetch("/api/calls/events", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            call_id: this.callId,
-            type: "tool_result_returned",
-            payload: { name, ok: !result.error },
-          }),
-        }).catch((err) => console.error("[v0] Failed to log tool_result_returned event:", err))
-      }
+      this.emit("tool_result_returned", { name, ok: !result.error, result })
 
       return result
     } catch (error) {
       console.error(`[v0] Tool execution error for ${name}:`, error)
 
-      if (this.callId) {
-        fetch("/api/calls/events", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            call_id: this.callId,
-            type: "tool_result_returned",
-            payload: { name, ok: false },
-          }),
-        }).catch((err) => console.error("[v0] Failed to log tool_result_returned event:", err))
-      }
+      this.emit("tool_result_returned", {
+        name,
+        ok: false,
+        error: error instanceof Error ? error.message : "Unknown error",
+      })
 
       return {
         error: error instanceof Error ? error.message : "Tool execution failed",
@@ -462,6 +488,7 @@ class CallClient {
     }
 
     const result = await response.json()
+    this.emit("lead_saved", { lead_id: result.lead_id })
     return { ok: true, lead_id: result.lead_id }
   }
 
@@ -533,6 +560,7 @@ class CallClient {
     }
 
     const result = await response.json()
+    this.emit("handoff_requested", { ticket_id: result.ticket_id })
     return { ok: true, ticket_id: result.ticket_id }
   }
 

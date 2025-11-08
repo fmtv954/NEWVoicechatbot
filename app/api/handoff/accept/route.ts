@@ -43,7 +43,14 @@ export async function POST(request: NextRequest) {
 
     // Check if ticket is still pending and not expired
     if (ticket.status !== "pending") {
-      return NextResponse.json({ error: `Ticket already ${ticket.status}` }, { status: 409 })
+      return NextResponse.json(
+        {
+          error: `Ticket already ${ticket.status}`,
+          status: ticket.status,
+          accepted_at: ticket.accepted_at,
+        },
+        { status: 409 },
+      )
     }
 
     const now = new Date()
@@ -62,7 +69,28 @@ export async function POST(request: NextRequest) {
         })
       }
 
-      return NextResponse.json({ error: "Ticket expired" }, { status: 410 })
+      return NextResponse.json(
+        {
+          error: "Ticket expired",
+          expires_at: ticket.expires_at,
+        },
+        { status: 410 },
+      )
+    }
+
+    let leadInfo: { first_name?: string; last_name?: string; email?: string; phone?: string } | null = null
+    if (ticket.call_id) {
+      const { data: lead } = await supabaseAdmin
+        .from("leads")
+        .select("first_name, last_name, email, phone")
+        .eq("campaign_id", campaign_id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .single()
+
+      if (lead) {
+        leadInfo = lead
+      }
     }
 
     // Mark ticket as accepted
@@ -119,9 +147,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       ok: true,
       ticket_id,
+      call_id: ticket.call_id,
       room_name: roomName,
       livekit_token: livekitToken,
       livekit_url: livekitUrl,
+      lead: leadInfo,
+      reason: ticket.reason,
     })
   } catch (error) {
     console.error("[Handoff Accept] Failed:", error)
