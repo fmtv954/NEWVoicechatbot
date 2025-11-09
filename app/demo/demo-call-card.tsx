@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useRef } from "react"
-import { Phone, PhoneOff, AlertCircle, CheckCircle2, Volume2, Mic, MicOff, Radio } from "lucide-react"
+import { Phone, PhoneOff, AlertCircle, CheckCircle2, Volume2, Mic, MicOff, Radio, UserPlus } from "lucide-react"
 import CallClient from "@/lib/callClient"
 import { DebugPanel } from "@/components/DebugPanel"
 import { AudioDiagnostics } from "@/components/AudioDiagnostics"
@@ -265,12 +265,36 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
             <p className="text-sm text-blue-700">Transcripts only; no audio recorded.</p>
           </div>
 
+          {/* Handoff status banner */}
+          {handoffData.sent && (
+            <div className="mb-6 bg-orange-50 border border-orange-300 rounded-lg p-4">
+              <div className="flex items-center gap-3">
+                <div className="flex-shrink-0">
+                  <UserPlus className="w-6 h-6 text-orange-600 animate-pulse" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-sm font-semibold text-orange-900">Handoff In Progress</h3>
+                  <p className="text-xs text-orange-700 mt-1">
+                    Transferring to human agent. Hold music should be playing...
+                  </p>
+                  {handoffData.reason && <p className="text-xs text-orange-600 mt-1">Reason: {handoffData.reason}</p>}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Caller ID */}
           <div className="text-center space-y-4 mb-6">
             <div className="w-24 h-24 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center mx-auto shadow-lg">
-              <Phone className="w-12 h-12 text-white" />
+              {handoffData.sent ? (
+                <UserPlus className="w-12 h-12 text-white animate-pulse" />
+              ) : (
+                <Phone className="w-12 h-12 text-white" />
+              )}
             </div>
-            <h2 className="text-3xl font-semibold text-slate-900">AI Helper</h2>
+            <h2 className="text-3xl font-semibold text-slate-900">
+              {handoffData.sent ? "Transferring..." : "AI Helper"}
+            </h2>
 
             {/* Ring indicator */}
             {isRinging && (
@@ -281,7 +305,7 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
             )}
 
             {callState === "connecting" && <p className="text-sm text-slate-500">Connecting...</p>}
-            {callState === "connected" && (
+            {callState === "connected" && !handoffData.sent && (
               <div className="space-y-1">
                 <p className="text-sm text-green-600 font-medium">Connected</p>
                 <p className="text-xs text-slate-500">
@@ -294,6 +318,18 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
           {callState === "connected" && (
             <div className="mb-6 bg-slate-50 border border-slate-200 rounded-lg p-4 space-y-3">
               <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Live Diagnostics</h3>
+
+              {handoffData.sent && (
+                <div className="flex items-center justify-between bg-orange-50 border border-orange-200 rounded p-2">
+                  <div className="flex items-center gap-2">
+                    <UserPlus className="w-4 h-4 text-orange-600 animate-pulse" />
+                    <span className="text-sm font-medium text-orange-900">Handoff Active</span>
+                  </div>
+                  <span className="text-xs font-semibold px-2 py-1 rounded bg-orange-100 text-orange-700">
+                    TRANSFERRING
+                  </span>
+                </div>
+              )}
 
               {/* Microphone Input Level */}
               <div>
