@@ -187,28 +187,20 @@ export async function POST(request: NextRequest) {
         })
       }
     } else {
-      console.error("[Handoff] ❌ Slack notification failed:", slackResult.error)
+      console.warn("[Handoff] ⚠️ Slack notification failed:", slackResult.error)
+      console.warn("[Handoff] ⚠️ Handoff will continue without Slack notification")
 
-      console.log("[Handoff] 🧹 Cleaning up orphaned ticket after Slack failure...")
-      const { error: cleanupError } = await supabaseAdmin
-        .from("handoff_tickets")
-        .delete()
-        .eq("id", ticket.id)
-
-      if (cleanupError) {
-        console.error("[Handoff] ⚠ Failed to delete orphaned ticket:", cleanupError)
-      } else {
-        console.log("[Handoff] ✓ Orphaned ticket deleted")
+      if (call_id) {
+        console.log("[Handoff] 📝 Logging slack_notification_failed event...")
+        await pushEvent({
+          call_id,
+          type: "slack_notification_failed",
+          payload: {
+            ticket_id: ticket.id,
+            error: slackResult.error,
+          },
+        })
       }
-
-      return NextResponse.json(
-        {
-          error: "Failed to send Slack notification",
-          details: slackResult.error,
-          ticket_id: ticket.id,
-        },
-        { status: 500 },
-      )
     }
 
     console.log("=".repeat(80))
@@ -224,6 +216,7 @@ export async function POST(request: NextRequest) {
       ticket_id: ticket.id,
       notification_sent: slackResult.success,
       slackMessage: slackResult.formattedMessage,
+      warning: slackResult.success ? undefined : "Slack notification failed - check SLACK_WEBHOOK_URL",
     })
   } catch (error) {
     console.error("=".repeat(80))
