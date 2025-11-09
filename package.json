@@ -14,7 +14,7 @@
   "lint-staged": {
     "*.{ts,tsx}": [
       "eslint --fix",
-      "tsc-files --noEmit"
+      "node scripts/run-tsc.js"
     ],
     "*.{js,jsx,ts,tsx,json,css,md}": [
       "prettier --write"
