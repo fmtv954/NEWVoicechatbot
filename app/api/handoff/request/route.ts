@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     // Get campaign details
     console.log("[Handoff] 🔍 Fetching campaign details...")
     let campaign: { name: string } | null = null
-    
+
     try {
       const { data, error: campaignError } = await supabaseAdmin
         .from("campaigns")
@@ -41,28 +41,37 @@ export async function POST(request: NextRequest) {
 
       if (campaignError) {
         // Check if it's a connection error vs not found error
-        if (campaignError.message?.includes('fetch failed') || campaignError.code === 'PGRST301') {
+        if (campaignError.message?.includes("fetch failed") || campaignError.code === "PGRST301") {
           console.error("[Handoff] ❌ Database connection failed:", campaignError)
-          return NextResponse.json({ 
-            error: "Database connection failed. Please check Supabase configuration." 
-          }, { status: 500 })
-        } else if (campaignError.code === 'PGRST116') {
+          return NextResponse.json(
+            {
+              error: "Database connection failed. Please check Supabase configuration.",
+            },
+            { status: 500 },
+          )
+        } else if (campaignError.code === "PGRST116") {
           console.error("[Handoff] ❌ Campaign not found:", campaignError)
           return NextResponse.json({ error: "Campaign not found" }, { status: 404 })
         } else {
           console.error("[Handoff] ❌ Database error:", campaignError)
-          return NextResponse.json({ 
-            error: "Database error occurred while fetching campaign details" 
-          }, { status: 500 })
+          return NextResponse.json(
+            {
+              error: "Database error occurred while fetching campaign details",
+            },
+            { status: 500 },
+          )
         }
       }
 
       campaign = data
     } catch (error) {
       console.error("[Handoff] ❌ Unexpected error fetching campaign:", error)
-      return NextResponse.json({ 
-        error: "Failed to connect to database. Please check your environment configuration." 
-      }, { status: 500 })
+      return NextResponse.json(
+        {
+          error: "Failed to connect to database. Please check your environment configuration.",
+        },
+        { status: 500 },
+      )
     }
 
     if (!campaign) {
@@ -148,15 +157,19 @@ export async function POST(request: NextRequest) {
 
     if (call_id) {
       console.log("[Handoff] 📝 Logging handoff_requested event...")
-      await pushEvent({
-        call_id,
-        type: "handoff_requested",
-        payload: {
-          ticket_id: ticket.id,
-          reason,
-        },
-      })
-      console.log("[Handoff] ✓ Event logged")
+      try {
+        await pushEvent({
+          call_id,
+          type: "handoff_requested",
+          payload: {
+            ticket_id: ticket.id,
+            reason,
+          },
+        })
+        console.log("[Handoff] ✓ Event logged")
+      } catch (eventError) {
+        console.error("[Handoff] ⚠️ Failed to log handoff_requested event (non-critical):", eventError)
+      }
     }
 
     // Mint one-time JWT token
@@ -192,7 +205,6 @@ export async function POST(request: NextRequest) {
     console.log("[Handoff] - Reason:", reason)
     console.log("[Handoff] - Has lead data:", !!leadInfo)
 
-    // Try to send Slack notification (best effort)
     const slackResult = await sendSlackNotification({
       campaignName: campaign.name,
       customerName,
@@ -208,27 +220,35 @@ export async function POST(request: NextRequest) {
 
       if (call_id) {
         console.log("[Handoff] 📝 Logging slack_notification_sent event...")
-        await pushEvent({
-          call_id,
-          type: "slack_notification_sent",
-          payload: {
-            ticket_id: ticket.id,
-          },
-        })
+        try {
+          await pushEvent({
+            call_id,
+            type: "slack_notification_sent",
+            payload: {
+              ticket_id: ticket.id,
+            },
+          })
+        } catch (eventError) {
+          console.error("[Handoff] ⚠️ Failed to log slack_notification_sent event (non-critical):", eventError)
+        }
       }
     } else {
       console.error("[Handoff] ⚠️ Slack notification failed (handoff will continue):", slackResult.error)
 
       if (call_id) {
         console.log("[Handoff] 📝 Logging slack_notification_failed event...")
-        await pushEvent({
-          call_id,
-          type: "slack_notification_failed",
-          payload: {
-            ticket_id: ticket.id,
-            error: slackResult.error,
-          },
-        })
+        try {
+          await pushEvent({
+            call_id,
+            type: "slack_notification_failed",
+            payload: {
+              ticket_id: ticket.id,
+              error: slackResult.error,
+            },
+          })
+        } catch (eventError) {
+          console.error("[Handoff] ⚠️ Failed to log slack_notification_failed event (non-critical):", eventError)
+        }
       }
     }
 

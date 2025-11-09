@@ -13,6 +13,7 @@ export type CallEventType =
   | "lead_saved"
   | "handoff_requested"
   | "slack_notification_sent" // Replaced sms_sent with slack_notification_sent
+  | "slack_notification_failed" // Added missing event type
   | "handoff_accepted"
   | "handoff_timeout"
   | "call_ended"
