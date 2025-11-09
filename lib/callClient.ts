@@ -205,10 +205,14 @@ class CallClient {
         } catch (jsonError) {
           // Server returned non-JSON response (likely HTML error page)
           const errorText = await sessionResponse.text()
-          console.error('[v0] Server returned non-JSON error response:', errorText.substring(0, 200))
-          
+          console.error(
+            '[v0] Server returned non-JSON error response:',
+            errorText.substring(0, 200)
+          )
+
           if (sessionResponse.status === 500) {
-            errorMessage = 'Server configuration error. Please check that all required environment variables are set.'
+            errorMessage =
+              'Server configuration error. Please check that all required environment variables are set.'
           } else {
             errorMessage = `Server error (${sessionResponse.status}): ${sessionResponse.statusText}`
           }
@@ -629,14 +633,22 @@ class CallClient {
   }
 
   private watchForHandoffSilenceAck(): void {
+    console.log('[v0] 👂 WATCH FOR HANDOFF SILENCE ACK STARTED')
+    console.log('[v0] - Current pendingHandoffSilenceAck:', this.pendingHandoffSilenceAck)
+    console.log('[v0] - Existing timeout:', !!this.handoffSilenceAckTimeout)
+
     if (this.handoffSilenceAckTimeout) {
+      console.log('[v0] 🔄 Clearing existing handoff silence timeout')
       clearTimeout(this.handoffSilenceAckTimeout)
     }
 
     this.pendingHandoffSilenceAck = true
+    console.log('[v0] ⏰ Setting 3-second timeout for handoff silence acknowledgment')
     this.handoffSilenceAckTimeout = setTimeout(() => {
+      console.log('[v0] ⏰ Handoff silence timeout reached - calling handleHandoffSilenceFailure')
       this.handleHandoffSilenceFailure('timeout')
     }, 3000)
+    console.log('[v0] ✓ Handoff silence watch setup complete')
   }
 
   private acknowledgeHandoffSilence(): void {
@@ -817,6 +829,26 @@ class CallClient {
         if (message.type === 'conversation.item.input_audio_transcription.completed') {
           const transcript = message.transcript || ''
           console.log('[v0] 🎤 User said:', transcript)
+
+          // Check for handoff phrases in transcript
+          const handoffPhrases = [
+            'speak with someone',
+            'talk to someone',
+            'human agent',
+            'real person',
+            'transfer me',
+            'need help',
+            'customer service',
+          ]
+
+          const lowerTranscript = transcript.toLowerCase()
+          const foundPhrase = handoffPhrases.find((phrase) => lowerTranscript.includes(phrase))
+          if (foundPhrase) {
+            console.log('[v0] 🚨 HANDOFF PHRASE DETECTED:', foundPhrase)
+            console.log('[v0] - Full transcript:', transcript)
+            console.log('[v0] - Current handoffInProgress:', this.handoffInProgress)
+          }
+
           this.emit('transcript', { speaker: 'user', text: transcript })
         }
 
@@ -1066,7 +1098,7 @@ class CallClient {
         type: 'function_call_output',
         call_id: callId,
         output: JSON.stringify(output),
-      }
+      },
     })
   }
 
@@ -1223,27 +1255,55 @@ class CallClient {
         const packetsIncreased = currentPackets > lastPackets
         const energyIncreased = totalAudioEnergy > lastAudioEnergy
 
+        // Enhanced logging for zero packet size debugging
+        const bytesDelta = currentBytes - lastBytes
+        const packetsDelta = currentPackets - lastPackets
+        const energyDelta = totalAudioEnergy - lastAudioEnergy
+
         if (bytesIncreased && packetsIncreased) {
           if (energyIncreased && audioLevel > 0) {
             console.log('[v0] ✓ AUDIO TRANSMITTING (with sound):', {
               bytes: currentBytes,
+              bytesDelta,
               packets: currentPackets,
+              packetsDelta,
               audioLevel: audioLevel.toFixed(4),
-              energyDelta: (totalAudioEnergy - lastAudioEnergy).toFixed(6),
+              energyDelta: energyDelta.toFixed(6),
+              micLevel: this.lastMicrophoneLevel,
             })
           } else {
             console.log(
-              '[v0] ⚠️ Bytes transmitting but NO AUDIO ENERGY - sending silence frames:',
+              '[v0] ⚠️ ZERO PACKET SIZE ISSUE - Bytes transmitting but NO AUDIO ENERGY:',
               {
                 bytes: currentBytes,
+                bytesDelta,
                 packets: currentPackets,
+                packetsDelta,
                 audioLevel: audioLevel.toFixed(4),
                 totalAudioEnergy: totalAudioEnergy.toFixed(6),
+                micLevel: this.lastMicrophoneLevel,
+                audioContextState: this.audioContext?.state,
+                streamActive: this.localStream?.active,
               }
             )
           }
         } else if (lastBytes > 0) {
-          console.log('[v0] ⚠️ Microphone NOT transmitting - bytes/packets not increasing')
+          console.log('[v0] ⚠️ Microphone NOT transmitting - bytes/packets not increasing:', {
+            currentBytes,
+            lastBytes,
+            currentPackets,
+            lastPackets,
+            micLevel: this.lastMicrophoneLevel,
+            audioContextState: this.audioContext?.state,
+            streamActive: this.localStream?.active,
+          })
+        } else if (currentBytes === 0 && currentPackets === 0) {
+          console.log('[v0] 🔇 NO AUDIO DATA - Zero bytes and packets:', {
+            micLevel: this.lastMicrophoneLevel,
+            audioContextState: this.audioContext?.state,
+            streamActive: this.localStream?.active,
+            hasLocalStream: !!this.localStream,
+          })
         }
 
         lastBytes = currentBytes
@@ -1291,13 +1351,21 @@ class CallClient {
   }
 
   private enterHandoffMode(): void {
+    console.log('[v0] 🚨 ENTER HANDOFF MODE CALLED')
+    console.log('[v0] - Current handoffInProgress:', this.handoffInProgress)
+    console.log('[v0] - Call ID:', this.callId)
+    console.log('[v0] - Timestamp:', new Date().toISOString())
+
     if (this.handoffInProgress) {
+      console.log('[v0] ⚠️ Handoff already in progress, skipping')
       return
     }
 
     console.log('[v0] 🤫 Entering handoff mode - silencing AI responses')
+    console.log('[v0] handoffInProgress:', this.handoffInProgress)
 
     this.handoffInProgress = true
+    console.log('[v0] ✓ Set handoffInProgress to:', this.handoffInProgress)
 
     if (this.remoteAudioElement) {
       this.remoteAudioElement.muted = true
@@ -1309,8 +1377,10 @@ class CallClient {
     this.updateDiagnostics()
     this.updateProcessingState()
 
+    console.log('[v0] 📤 Sending response.cancel event to OpenAI')
     this.sendRealtimeEvent({ type: 'response.cancel' })
 
+    console.log('[v0] 👂 Starting to watch for handoff silence acknowledgment')
     this.watchForHandoffSilenceAck()
 
     this.sendRealtimeEvent({
