@@ -163,6 +163,7 @@ export async function POST(request: NextRequest) {
     console.log("[Handoff] - Reason:", reason)
     console.log("[Handoff] - Has lead data:", !!leadInfo)
 
+    // Try to send Slack notification (best effort)
     const slackResult = await sendSlackNotification({
       campaignName: campaign.name,
       customerName,
@@ -187,8 +188,7 @@ export async function POST(request: NextRequest) {
         })
       }
     } else {
-      console.warn("[Handoff] ⚠️ Slack notification failed:", slackResult.error)
-      console.warn("[Handoff] ⚠️ Handoff will continue without Slack notification")
+      console.error("[Handoff] ⚠️ Slack notification failed (handoff will continue):", slackResult.error)
 
       if (call_id) {
         console.log("[Handoff] 📝 Logging slack_notification_failed event...")
@@ -216,7 +216,7 @@ export async function POST(request: NextRequest) {
       ticket_id: ticket.id,
       notification_sent: slackResult.success,
       slackMessage: slackResult.formattedMessage,
-      warning: slackResult.success ? undefined : "Slack notification failed - check SLACK_WEBHOOK_URL",
+      acceptUrl, // Include accept URL in response so it can be displayed to caller
     })
   } catch (error) {
     console.error("=".repeat(80))
