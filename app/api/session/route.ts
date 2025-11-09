@@ -27,13 +27,14 @@ function checkRateLimit(ip: string): boolean {
 }
 
 export async function POST(req: NextRequest) {
-  // Get client IP for rate limiting
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0] || req.headers.get("x-real-ip") || "unknown"
+  try {
+    // Get client IP for rate limiting
+    const ip = req.headers.get("x-forwarded-for")?.split(",")[0] || req.headers.get("x-real-ip") || "unknown"
 
-  // Check rate limit
-  if (!checkRateLimit(ip)) {
-    return NextResponse.json({ error: "Too many requests. Please try again later." }, { status: 429 })
-  }
+    // Check rate limit
+    if (!checkRateLimit(ip)) {
+      return NextResponse.json({ error: "Too many requests. Please try again later." }, { status: 429 })
+    }
 
   // Parse and validate request body
   let body: { agent_id?: string; campaign_id?: string }
@@ -112,6 +113,18 @@ export async function POST(req: NextRequest) {
     })
   } catch (error) {
     console.error("[v0] Error creating OpenAI session:", error)
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+  }
+  } catch (error) {
+    console.error("[v0] Error in session API:", error)
+    
+    // Check if it's a configuration error (missing environment variables)
+    if (error instanceof Error && error.message.includes("environment variable")) {
+      return NextResponse.json({ 
+        error: "Server configuration error. Please ensure all required environment variables are set. Check the README.md for setup instructions." 
+      }, { status: 500 })
+    }
+    
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
 }

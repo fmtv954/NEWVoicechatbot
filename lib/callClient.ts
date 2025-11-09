@@ -198,8 +198,22 @@ class CallClient {
       })
 
       if (!sessionResponse.ok) {
-        const errorData = await sessionResponse.json()
-        throw new Error(errorData.error || 'Failed to create session')
+        let errorMessage = 'Failed to create session'
+        try {
+          const errorData = await sessionResponse.json()
+          errorMessage = errorData.error || errorMessage
+        } catch (jsonError) {
+          // Server returned non-JSON response (likely HTML error page)
+          const errorText = await sessionResponse.text()
+          console.error('[v0] Server returned non-JSON error response:', errorText.substring(0, 200))
+          
+          if (sessionResponse.status === 500) {
+            errorMessage = 'Server configuration error. Please check that all required environment variables are set.'
+          } else {
+            errorMessage = `Server error (${sessionResponse.status}): ${sessionResponse.statusText}`
+          }
+        }
+        throw new Error(errorMessage)
       }
 
       const { callId, sessionClientSecret, rtcConfiguration } = await sessionResponse.json()
