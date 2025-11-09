@@ -188,6 +188,19 @@ export async function POST(request: NextRequest) {
       }
     } else {
       console.error("[Handoff] ❌ Slack notification failed:", slackResult.error)
+
+      console.log("[Handoff] 🧹 Cleaning up orphaned ticket after Slack failure...")
+      const { error: cleanupError } = await supabaseAdmin
+        .from("handoff_tickets")
+        .delete()
+        .eq("id", ticket.id)
+
+      if (cleanupError) {
+        console.error("[Handoff] ⚠ Failed to delete orphaned ticket:", cleanupError)
+      } else {
+        console.log("[Handoff] ✓ Orphaned ticket deleted")
+      }
+
       return NextResponse.json(
         {
           error: "Failed to send Slack notification",
