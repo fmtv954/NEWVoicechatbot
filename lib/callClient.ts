@@ -40,7 +40,8 @@ class CallClient {
   private audioContext: AudioContext | null = null
   private audioAnalyzer: AnalyserNode | null = null
   private ringStartTime = 0
-  private minRingDuration = 5000 // 5 seconds minimum ring before stopping
+  private minRingDuration = 6000 // 6 seconds minimum (2 full rings) for realistic experience
+  private maxRingDuration = 8000 // 8 seconds maximum (allows for slower connections)
   private aiIsSpeaking = false
   private isReceivingUserAudio = false
   private lastAudioLevel = 0
@@ -262,8 +263,23 @@ class CallClient {
         console.log('[v0] Data channel opened')
         this.emit('data_channel_open')
 
-        // Data channel ready, waiting for ring to finish before greeting...
-        console.log('[v0] Data channel ready, waiting for ring to complete before greeting...')
+        // Check if we can complete ring now that data channel is ready (but only after realistic ring duration)
+        if (this.hasReceivedAudio && !this.greetingSent) {
+          const ringElapsed = Date.now() - this.ringStartTime
+          const hasMinimumRings = ringElapsed >= this.minRingDuration
+          
+          if (hasMinimumRings) {
+            console.log('[v0] 📞 Data channel ready after realistic ring duration - sending greeting!')
+            this.sendRealtimeEvent({
+              type: 'response.create',
+            })
+            this.greetingSent = true
+          } else {
+            console.log(`[v0] Data channel ready, but waiting ${this.minRingDuration - ringElapsed}ms more for realistic ring duration...`)
+          }
+        } else {
+          console.log('[v0] Data channel ready, waiting for remote audio track...')
+        }
       })
 
       this.attachToolHandlers()
@@ -276,51 +292,31 @@ class CallClient {
         if (event.track.kind === 'audio') {
           if (!this.hasReceivedAudio) {
             const ringElapsed = Date.now() - this.ringStartTime
-            const remainingRing = Math.max(0, this.minRingDuration - ringElapsed)
+            const minRingRemaining = Math.max(0, this.minRingDuration - ringElapsed)
+            const maxRingRemaining = Math.max(0, this.maxRingDuration - ringElapsed)
 
             console.log(`[v0] First remote audio received after ${ringElapsed}ms ring`)
-            console.log(`[v0] Waiting ${remainingRing}ms for ring to complete...`)
-
-            // Wait for remaining ring time before stopping
-            setTimeout(() => {
-              console.log('[v0] Ring duration met - stopping ring and starting timer')
-              this.hasReceivedAudio = true
-
-              // Stop ring tone
-              if (this.ringAudio) {
-                this.ringAudio.pause()
-                this.ringAudio = null
-              }
-
-              if (
-                !this.greetingSent &&
-                this.dataChannel &&
-                this.dataChannel.readyState === 'open'
-              ) {
-                console.log('[v0] 🎤 Ring complete - requesting AI greeting now...')
-                this.sendRealtimeEvent({
-                  type: 'response.create',
-                })
-                this.greetingSent = true
-              }
-
-              // Start timer
-              this.startTimer()
-
-              // Update state to connected
-              this.config.onStateChange?.('connected')
-
-              if (this.callId) {
-                fetch('/api/calls/events', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    call_id: this.callId,
-                    type: 'first_ai_audio',
-                  }),
-                }).catch((err) => console.error('[v0] Failed to log first_ai_audio event:', err))
-              }
-            }, remainingRing)
+            
+            // Realistic phone ring logic - ensure at least 2 full rings (6s) for authentic experience
+            const isDataChannelReady = this.dataChannel && this.dataChannel.readyState === 'open'
+            const hasMinimumRings = ringElapsed >= this.minRingDuration
+            const connectionFullyReady = isDataChannelReady && hasMinimumRings
+            
+            if (connectionFullyReady) {
+              console.log('[v0] 📞 Connection ready after realistic ring duration - answering call!')
+              this.completeRingAndStartGreeting()
+            } else {
+              // Wait for either minimum ring duration (realistic) or maximum (slow connection fallback)
+              const waitTime = isDataChannelReady ? minRingRemaining : maxRingRemaining
+              const waitReason = isDataChannelReady ? 'completing realistic ring duration' : 'waiting for data channel + max duration'
+              
+              console.log(`[v0] Waiting ${waitTime}ms for ring to complete (${waitReason})...`)
+              
+              setTimeout(() => {
+                console.log('[v0] 📞 Ring duration completed - answering call!')
+                this.completeRingAndStartGreeting()
+              }, waitTime)
+            }
           }
 
           if (!this.remoteAudioElement) {
@@ -1037,6 +1033,56 @@ class CallClient {
     } catch (error) {
       console.error('[v0] ❌ Handoff tool exception:', error)
       throw error
+    }
+  }
+
+  /**
+   * Complete ring and start AI greeting - extracted common logic
+   */
+  private completeRingAndStartGreeting(): void {
+    if (this.hasReceivedAudio) {
+      return // Already completed
+    }
+    
+    this.hasReceivedAudio = true
+
+    // Stop ring tone
+    if (this.ringAudio) {
+      this.ringAudio.pause()
+      this.ringAudio = null
+    }
+
+    // Send AI greeting if conditions are met
+    if (
+      !this.greetingSent &&
+      this.dataChannel &&
+      this.dataChannel.readyState === 'open'
+    ) {
+      console.log('[v0] 🎤 Ring complete - requesting AI greeting now...')
+      this.sendRealtimeEvent({
+        type: 'response.create',
+      })
+      this.greetingSent = true
+    } else if (!this.greetingSent) {
+      console.log('[v0] ⚠️ Cannot send greeting - data channel not ready')
+    }
+
+    // Start timer
+    this.startTimer()
+
+    // Update state to connected
+    this.config.onStateChange?.('connected')
+
+    // Log first audio event
+    if (this.callId) {
+      fetch('/api/calls/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          call_id: this.callId,
+          type: 'first_ai_audio',
+        }),
+      }).catch((err) => console.error('[v0] Failed to log first_ai_audio event:', err))
     }
   }
 
