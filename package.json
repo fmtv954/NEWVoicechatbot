@@ -14,7 +14,7 @@
   "lint-staged": {
     "*.{ts,tsx}": [
       "eslint --fix",
-      "pnpm exec tsc --noEmit"
+      "tsc-files --noEmit"
     ],
     "*.{js,jsx,ts,tsx,json,css,md}": [
       "prettier --write"
