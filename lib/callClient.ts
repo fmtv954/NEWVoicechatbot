@@ -1061,10 +1061,12 @@ class CallClient {
     console.log(`[v0] Sending tool output for ${name}:`, output)
 
     this.sendRealtimeEvent({
-      type: 'response.function_call_output',
-      call_id: callId,
-      name,
-      output: JSON.stringify(output),
+      type: 'conversation.item.create',
+      item: {
+        type: 'function_call_output',
+        call_id: callId,
+        output: JSON.stringify(output),
+      }
     })
   }
 

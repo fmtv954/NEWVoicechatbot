@@ -30,14 +30,43 @@ export async function POST(request: NextRequest) {
 
     // Get campaign details
     console.log("[Handoff] 🔍 Fetching campaign details...")
-    const { data: campaign, error: campaignError } = await supabaseAdmin
-      .from("campaigns")
-      .select("name")
-      .eq("id", campaign_id)
-      .single()
+    let campaign: { name: string } | null = null
+    
+    try {
+      const { data, error: campaignError } = await supabaseAdmin
+        .from("campaigns")
+        .select("name")
+        .eq("id", campaign_id)
+        .single()
 
-    if (campaignError || !campaign) {
-      console.error("[Handoff] ❌ Campaign not found:", campaignError)
+      if (campaignError) {
+        // Check if it's a connection error vs not found error
+        if (campaignError.message?.includes('fetch failed') || campaignError.code === 'PGRST301') {
+          console.error("[Handoff] ❌ Database connection failed:", campaignError)
+          return NextResponse.json({ 
+            error: "Database connection failed. Please check Supabase configuration." 
+          }, { status: 500 })
+        } else if (campaignError.code === 'PGRST116') {
+          console.error("[Handoff] ❌ Campaign not found:", campaignError)
+          return NextResponse.json({ error: "Campaign not found" }, { status: 404 })
+        } else {
+          console.error("[Handoff] ❌ Database error:", campaignError)
+          return NextResponse.json({ 
+            error: "Database error occurred while fetching campaign details" 
+          }, { status: 500 })
+        }
+      }
+
+      campaign = data
+    } catch (error) {
+      console.error("[Handoff] ❌ Unexpected error fetching campaign:", error)
+      return NextResponse.json({ 
+        error: "Failed to connect to database. Please check your environment configuration." 
+      }, { status: 500 })
+    }
+
+    if (!campaign) {
+      console.error("[Handoff] ❌ Campaign not found: No data returned")
       return NextResponse.json({ error: "Campaign not found" }, { status: 404 })
     }
 
