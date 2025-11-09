@@ -20,15 +20,13 @@ export default async function AdminDevPage() {
   const defaultAgentId = agent?.id || "a0000000-0000-0000-0000-000000000001"
 
   return (
-    <div className="min-h-screen bg-background p-8">
-      <div className="mx-auto max-w-2xl">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold">Campaign Creator (Dev Only)</h1>
-          <p className="mt-2 text-muted-foreground">Create a new campaign and get the embed code and QR code.</p>
-        </div>
-
-        <CreateCampaignForm defaultAgentId={defaultAgentId} />
+    <div className="mx-auto max-w-2xl p-6 sm:p-10">
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold">Campaign Creator (Dev Only)</h1>
+        <p className="mt-2 text-muted-foreground">Create a new campaign and get the embed code and QR code.</p>
       </div>
+
+      <CreateCampaignForm defaultAgentId={defaultAgentId} />
     </div>
   )
 }

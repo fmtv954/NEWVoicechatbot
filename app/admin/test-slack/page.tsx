@@ -40,62 +40,69 @@ export default function TestSlackPage() {
   }
 
   return (
-    <div className="container mx-auto max-w-2xl p-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>Slack Webhook Test</CardTitle>
-          <CardDescription>
-            Test your Slack webhook configuration to ensure handoff notifications will work correctly
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <p className="text-sm text-muted-foreground">
-              This will send a test message to your configured Slack channel. Make sure you have:
-            </p>
-            <ul className="ml-6 list-disc space-y-1 text-sm text-muted-foreground">
-              <li>Created a Slack Incoming Webhook</li>
-              <li>Set the SLACK_WEBHOOK_URL environment variable</li>
-              <li>Invited the Slack app to your channel</li>
-            </ul>
-          </div>
+    <div className="mx-auto max-w-2xl p-6 sm:p-10">
+      <div className="space-y-6">
+        <header className="space-y-2">
+          <h1 className="text-3xl font-bold tracking-tight">Slack Webhook Test</h1>
+          <p className="text-base text-muted-foreground">
+            Test your Slack webhook configuration to ensure handoff notifications will work correctly.
+          </p>
+        </header>
 
-          <Button onClick={handleTest} disabled={loading} className="w-full">
-            {loading ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Sending Test Message...
-              </>
-            ) : (
-              <>
-                <Send className="mr-2 h-4 w-4" />
-                Send Test Message
-              </>
+        <Card>
+          <CardHeader>
+            <CardTitle>Send Test Message</CardTitle>
+            <CardDescription>Verify your Slack integration is working properly</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <p className="text-sm text-muted-foreground">
+                This will send a test message to your configured Slack channel. Make sure you have:
+              </p>
+              <ul className="ml-6 list-disc space-y-1 text-sm text-muted-foreground">
+                <li>Created a Slack Incoming Webhook</li>
+                <li>Set the SLACK_WEBHOOK_URL environment variable</li>
+                <li>Invited the Slack app to your channel</li>
+              </ul>
+            </div>
+
+            <Button onClick={handleTest} disabled={loading} className="w-full">
+              {loading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Sending Test Message...
+                </>
+              ) : (
+                <>
+                  <Send className="mr-2 h-4 w-4" />
+                  Send Test Message
+                </>
+              )}
+            </Button>
+
+            {result && (
+              <Alert variant={result.success ? "default" : "destructive"}>
+                {result.success ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+                <AlertTitle>{result.success ? "Success!" : "Error"}</AlertTitle>
+                <AlertDescription>
+                  {result.success ? (
+                    <div className="space-y-2">
+                      <p>{result.message}</p>
+                      <p className="text-xs text-muted-foreground">Check your Slack channel for the test message</p>
+                      {result.timestamp && <p className="text-xs text-muted-foreground">Sent at: {result.timestamp}</p>}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <p>{result.error}</p>
+                      <p className="text-xs">Make sure SLACK_WEBHOOK_URL is set in your environment variables</p>
+                    </div>
+                  )}
+                </AlertDescription>
+              </Alert>
             )}
-          </Button>
-
-          {result && (
-            <Alert variant={result.success ? "default" : "destructive"}>
-              {result.success ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
-              <AlertTitle>{result.success ? "Success!" : "Error"}</AlertTitle>
-              <AlertDescription>
-                {result.success ? (
-                  <div className="space-y-2">
-                    <p>{result.message}</p>
-                    <p className="text-xs text-muted-foreground">Check your Slack channel for the test message</p>
-                    {result.timestamp && <p className="text-xs text-muted-foreground">Sent at: {result.timestamp}</p>}
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <p>{result.error}</p>
-                    <p className="text-xs">Make sure SLACK_WEBHOOK_URL is set in your environment variables</p>
-                  </div>
-                )}
-              </AlertDescription>
-            </Alert>
-          )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   )
 }
