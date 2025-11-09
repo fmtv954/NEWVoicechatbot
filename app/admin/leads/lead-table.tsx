@@ -257,13 +257,14 @@ export function LeadTable({ initialLeads }: LeadTableProps) {
               <th className="px-4 py-3 font-medium">Customer</th>
               <th className="px-4 py-3 font-medium">Contact</th>
               <th className="px-4 py-3 font-medium">Reason</th>
+              <th className="px-4 py-3 font-medium">Transcript</th>
               <th className="px-4 py-3 font-medium">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
             {filteredLeads.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
+                <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
                   No leads match your filters yet.
                 </td>
               </tr>
@@ -275,6 +276,9 @@ export function LeadTable({ initialLeads }: LeadTableProps) {
                   Boolean(value && value.length > 0)
                 )
                 const reasonPreview = lead.reason.slice(0, 80)
+                const hasTranscript = Boolean(lead.transcript && lead.transcript.length > 0)
+                const shouldShowPreview = hasTranscript && lead.transcript.length <= 160
+                const transcriptPreview = lead.transcript.slice(0, 80)
 
                 return (
                   <tr key={lead.id} className="hover:bg-muted/40">
@@ -303,6 +307,33 @@ export function LeadTable({ initialLeads }: LeadTableProps) {
                       <span className="line-clamp-2 text-muted-foreground">
                         {reasonPreview || '–'}
                       </span>
+                    </td>
+                    <td className="px-4 py-3 align-top">
+                      {hasTranscript ? (
+                        shouldShowPreview ? (
+                          <button
+                            type="button"
+                            onClick={() => setActiveLeadId(lead.id)}
+                            className="line-clamp-2 text-left text-muted-foreground underline-offset-4 hover:underline"
+                            aria-label="View transcript"
+                          >
+                            {transcriptPreview}
+                            {lead.transcript.length > transcriptPreview.length ? '…' : ''}
+                          </button>
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="link"
+                            size="sm"
+                            className="px-0"
+                            onClick={() => setActiveLeadId(lead.id)}
+                          >
+                            View transcript
+                          </Button>
+                        )
+                      ) : (
+                        <span className="text-muted-foreground">–</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 align-top">
                       <Button
