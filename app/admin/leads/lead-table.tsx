@@ -16,18 +16,9 @@ import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { sanitizeEmail, sanitizePhone, sanitizePlainText } from '@/lib/text'
 
-export interface LeadRecord {
-  id: string
-  createdAt: string
-  campaignName?: string | null
-  agentName?: string | null
-  firstName?: string | null
-  lastName?: string | null
-  email?: string | null
-  phone?: string | null
-  reason?: string | null
-  transcript?: string | null
-}
+import { useLiveLeads } from '@/hooks/useLiveLeads'
+
+import type { LeadRecord } from './types'
 
 interface LeadTableProps {
   initialLeads: LeadRecord[]
@@ -114,10 +105,9 @@ export function LeadTable({ initialLeads }: LeadTableProps) {
   const [selectedCampaign, setSelectedCampaign] = useState<string | null>(null)
   const [activeLeadId, setActiveLeadId] = useState<string | null>(null)
 
-  const normalizedLeads = useMemo(
-    () => initialLeads.map((lead) => toNormalizedLead(lead)),
-    [initialLeads]
-  )
+  const { leads, error: liveError, isRefreshing } = useLiveLeads(initialLeads)
+
+  const normalizedLeads = useMemo(() => leads.map((lead) => toNormalizedLead(lead)), [leads])
 
   const activeLead = useMemo(
     () => normalizedLeads.find((lead) => lead.id === activeLeadId) ?? null,
@@ -231,10 +221,17 @@ export function LeadTable({ initialLeads }: LeadTableProps) {
             </select>
           </div>
           <div className="flex items-center gap-2">
-            <p className="text-muted-foreground text-sm">
-              Showing <span className="font-semibold text-foreground">{filteredLeads.length}</span>{' '}
-              of {normalizedLeads.length}
-            </p>
+            <div className="flex flex-col items-end text-right">
+              <p className="text-muted-foreground text-sm">
+                Showing{' '}
+                <span className="font-semibold text-foreground">{filteredLeads.length}</span> of{' '}
+                {normalizedLeads.length}
+                {isRefreshing ? <span className="ml-2 text-xs">Updating…</span> : null}
+              </p>
+              {liveError ? (
+                <p className="text-destructive text-xs">Live updates paused: {liveError}</p>
+              ) : null}
+            </div>
             <Button
               type="button"
               variant="outline"
