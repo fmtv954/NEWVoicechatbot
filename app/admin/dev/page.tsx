@@ -10,14 +10,22 @@ export default async function AdminDevPage() {
     redirect("/")
   }
 
-  // Fetch the seeded demo agent ID
-  const { data: agent } = await supabaseAdmin
-    .from("agents")
-    .select("id, name")
-    .eq("id", "a0000000-0000-0000-0000-000000000001")
-    .single()
+  let defaultAgentId = "a0000000-0000-0000-0000-000000000001"
 
-  const defaultAgentId = agent?.id || "a0000000-0000-0000-0000-000000000001"
+  try {
+    const { data: agent, error } = await supabaseAdmin
+      .from("agents")
+      .select("id, name")
+      .eq("id", "a0000000-0000-0000-0000-000000000001")
+      .maybeSingle()
+
+    if (!error && agent?.id) {
+      defaultAgentId = agent.id
+    }
+  } catch (error) {
+    console.error("[Admin Dev] Failed to fetch agent:", error)
+    // Continue with default agent ID
+  }
 
   return (
     <div className="min-h-screen bg-background p-8">
