@@ -196,7 +196,6 @@ export default function DemoCallCard({ campaignId, agentId }: DemoCallCardProps)
   const handleForceResumeAudio = async () => {
     if (callClientRef.current) {
       await callClientRef.current.forceResumeAudio()
-      console.log("[v0] Force resume audio triggered from UI")
     }
   }
 
