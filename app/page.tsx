@@ -35,19 +35,19 @@ export default function HomePage() {
           </Link>
 
           <Link
-            href="/api/test/slack-lead"
-            className="rounded-lg border border-gray-200 bg-white p-6 shadow-lg transition-all hover:scale-105 hover:shadow-xl"
-          >
-            <h2 className="mb-2 text-2xl font-semibold text-gray-900">Test Slack</h2>
-            <p className="text-gray-600">Send the most recent lead to Slack for testing</p>
-          </Link>
-
-          <Link
             href="/admin/prompt"
             className="rounded-lg border border-gray-200 bg-white p-6 shadow-lg transition-all hover:scale-105 hover:shadow-xl"
           >
-            <h2 className="mb-2 text-2xl font-semibold text-gray-900">AI Prompt</h2>
-            <p className="text-gray-600">View and manage the AI agent system prompt</p>
+            <h2 className="mb-2 text-2xl font-semibold text-gray-900">AI Prompt Editor</h2>
+            <p className="text-gray-600">Edit the AI agent system prompt and behavior</p>
+          </Link>
+
+          <Link
+            href="/admin/test-slack"
+            className="rounded-lg border border-gray-200 bg-white p-6 shadow-lg transition-all hover:scale-105 hover:shadow-xl"
+          >
+            <h2 className="mb-2 text-2xl font-semibold text-gray-900">Test Slack</h2>
+            <p className="text-gray-600">Test Slack webhook integration</p>
           </Link>
         </div>
 
