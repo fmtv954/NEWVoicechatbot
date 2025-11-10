@@ -3,7 +3,7 @@
  * Uses Incoming Webhooks to post messages to a channel
  */
 
-import { sanitizeEmail, sanitizePhone, sanitizePlainText } from './text'
+import { sanitizeEmail, sanitizePhone, sanitizePlainText } from "./text"
 
 interface SlackNotificationOptions {
   campaignName: string
@@ -18,133 +18,116 @@ interface SlackNotificationOptions {
 const MAX_FIELD_LENGTH = 256
 
 export async function sendSlackNotification(
-  options: SlackNotificationOptions
+  options: SlackNotificationOptions,
 ): Promise<{ success: boolean; error?: string; formattedMessage?: string }> {
-  const sanitizedCampaignName = sanitizePlainText(options.campaignName) ?? 'Unknown Campaign'
+  const sanitizedCampaignName = sanitizePlainText(options.campaignName) ?? "Unknown Campaign"
   const sanitizedCustomerName = sanitizePlainText(options.customerName)
   const sanitizedCustomerPhone = sanitizePhone(options.customerPhone)
   const sanitizedCustomerEmail = sanitizeEmail(options.customerEmail)
-  const sanitizedReason =
-    sanitizePlainText(options.reason, { allowNewlines: true }) ?? 'No reason provided'
-
-  console.log('[Slack] 🚀 Starting notification send...')
-  console.log('[Slack] Campaign:', sanitizedCampaignName)
-  console.log('[Slack] Customer:', sanitizedCustomerName || 'No name provided')
-  console.log('[Slack] Reason:', sanitizedReason)
-  console.log('[Slack] Accept URL:', options.acceptUrl)
+  const sanitizedReason = sanitizePlainText(options.reason, { allowNewlines: true }) ?? "No reason provided"
 
   const webhookUrl = process.env.SLACK_WEBHOOK_URL
 
   if (!webhookUrl) {
-    console.error('[Slack] ❌ SLACK_WEBHOOK_URL not configured in environment')
-    return { success: false, error: 'Slack webhook not configured' }
+    console.error("[Slack] SLACK_WEBHOOK_URL not configured")
+    return { success: false, error: "Slack webhook not configured" }
   }
 
-  console.log('[Slack] ✓ Webhook URL found, length:', webhookUrl.length)
-
-  // Build rich Block Kit message
   const blocks: Array<Record<string, unknown>> = [
-    // Header with urgency indicator
     {
-      type: 'header',
+      type: "header",
       text: {
-        type: 'plain_text',
-        text: '🚨 URGENT: Visitor Needs Help',
+        type: "plain_text",
+        text: "🚨 URGENT: Visitor Needs Help",
         emoji: true,
       },
     },
-    // Campaign and customer info section
     {
-      type: 'section',
+      type: "section",
       fields: [
         {
-          type: 'mrkdwn',
+          type: "mrkdwn",
           text: `*Campaign:*\n${sanitizedCampaignName}`,
         },
         {
-          type: 'mrkdwn',
+          type: "mrkdwn",
           text: `*Ticket ID:*\n${options.ticketId.slice(0, 8)}`,
         },
       ],
     },
   ]
 
-  // Add customer info if available
   if (sanitizedCustomerName || sanitizedCustomerPhone || sanitizedCustomerEmail) {
     const customerFields = []
 
     if (sanitizedCustomerName) {
       customerFields.push({
-        type: 'mrkdwn',
+        type: "mrkdwn",
         text: `*Customer:*\n${sanitizedCustomerName}`,
       })
     }
 
     if (sanitizedCustomerPhone) {
       customerFields.push({
-        type: 'mrkdwn',
+        type: "mrkdwn",
         text: `*Phone:*\n${sanitizedCustomerPhone}`,
       })
     }
 
     if (sanitizedCustomerEmail) {
       customerFields.push({
-        type: 'mrkdwn',
+        type: "mrkdwn",
         text: `*Email:*\n${sanitizedCustomerEmail}`,
       })
     }
 
     blocks.push({
-      type: 'section',
+      type: "section",
       fields: customerFields,
     })
   }
 
-  // Reason section
   blocks.push({
-    type: 'section',
+    type: "section",
     text: {
-      type: 'mrkdwn',
+      type: "mrkdwn",
       text: `*Reason for Contact:*\n${sanitizedReason}`,
     },
   })
 
-  // Divider
   blocks.push({
-    type: 'divider',
+    type: "divider",
   })
 
-  // Accept Call button
   blocks.push({
-    type: 'actions',
+    type: "actions",
     elements: [
       {
-        type: 'button',
+        type: "button",
         text: {
-          type: 'plain_text',
-          text: '✅ Accept Call',
+          type: "plain_text",
+          text: "✅ Accept Call",
           emoji: true,
         },
-        style: 'primary',
+        style: "primary",
         url: options.acceptUrl,
-        action_id: 'accept_call',
+        action_id: "accept_call",
       },
     ],
   })
 
-  // Context footer with expiry warning
   blocks.push({
-    type: 'context',
+    type: "context",
     elements: [
       {
-        type: 'mrkdwn',
-        text: '⚠️ This ticket expires in 10 minutes',
+        type: "mrkdwn",
+        text: "⚠️ This ticket expires in 10 minutes",
       },
     ],
   })
 
   const payload = {
-    text: `URGENT: Visitor needs help - Campaign: ${sanitizedCampaignName}`, // Fallback text
+    text: `URGENT: Visitor needs help - Campaign: ${sanitizedCampaignName}`,
     blocks,
   }
 
@@ -154,7 +137,7 @@ export async function sendSlackNotification(
 Campaign: ${sanitizedCampaignName}
 Ticket ID: ${options.ticketId.slice(0, 8)}
 
-${sanitizedCustomerName ? `Customer: ${sanitizedCustomerName}\n` : ''}${sanitizedCustomerPhone ? `Phone: ${sanitizedCustomerPhone}\n` : ''}${sanitizedCustomerEmail ? `Email: ${sanitizedCustomerEmail}\n` : ''}
+${sanitizedCustomerName ? `Customer: ${sanitizedCustomerName}\n` : ""}${sanitizedCustomerPhone ? `Phone: ${sanitizedCustomerPhone}\n` : ""}${sanitizedCustomerEmail ? `Email: ${sanitizedCustomerEmail}\n` : ""}
 Reason for Contact:
 ${sanitizedReason}
 
@@ -163,28 +146,21 @@ Accept URL: ${options.acceptUrl}
 ⚠️ This ticket expires in 10 minutes
 `.trim()
 
-  console.log('[Slack] 📦 Payload blocks count:', blocks.length)
-  console.log('[Slack] 📦 Full payload:', JSON.stringify(payload, null, 2))
-
   const maxAttempts = 2
   const timeoutMs = 5_000
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => {
-      console.error('[Slack] ⏰ Request timed out after', timeoutMs, 'ms (attempt', attempt, ')')
+      console.error("[Slack] Request timed out (attempt", attempt, ")")
       controller.abort()
     }, timeoutMs)
 
     try {
-      console.log(
-        `[Slack] 🌐 Sending POST request to webhook (attempt ${attempt}/${maxAttempts})...`
-      )
-
       const response = await fetch(webhookUrl, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify(payload),
         signal: controller.signal,
@@ -192,49 +168,42 @@ Accept URL: ${options.acceptUrl}
 
       clearTimeout(timeoutId)
 
-      console.log('[Slack] 📥 Response status:', response.status, response.statusText)
-
       if (!response.ok) {
         const errorText = await response.text()
-        console.error('[Slack] ❌ Failed to send notification:', response.status, errorText)
+        console.error("[Slack] Failed to send notification:", response.status, errorText)
 
         if (attempt < maxAttempts && response.status >= 500) {
-          console.warn('[Slack] 🔁 Retrying due to server error...')
           continue
         }
 
         return { success: false, error: `HTTP ${response.status}: ${errorText}`, formattedMessage }
       }
 
-      const responseText = await response.text()
-      console.log('[Slack] ✅ Response body:', responseText)
-      console.log('[Slack] ✅ Notification sent successfully!')
       return { success: true, formattedMessage }
     } catch (error) {
       clearTimeout(timeoutId)
 
-      const isAbortError = error instanceof Error && error.name === 'AbortError'
+      const isAbortError = error instanceof Error && error.name === "AbortError"
 
       if (isAbortError) {
-        console.error('[Slack] ❌ Request aborted (likely due to timeout)')
+        console.error("[Slack] Request aborted (timeout)")
       } else {
-        console.error('[Slack] ❌ Network error:', error)
+        console.error("[Slack] Network error:", error)
       }
 
       if (attempt < maxAttempts) {
-        console.warn('[Slack] 🔁 Retrying Slack notification...')
         continue
       }
 
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      const errorMessage = error instanceof Error ? error.message : "Unknown error"
 
       return {
         success: false,
-        error: isAbortError ? 'Request timed out' : errorMessage,
+        error: isAbortError ? "Request timed out" : errorMessage,
         formattedMessage,
       }
     }
   }
 
-  return { success: false, error: 'Unable to send Slack notification', formattedMessage }
+  return { success: false, error: "Unable to send Slack notification", formattedMessage }
 }
