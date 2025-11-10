@@ -47,3 +47,10 @@ export function getSupabaseAdmin(): SupabaseClient {
 export function resetAdminClient(): void {
   adminClientInstance = null
 }
+
+/**
+ * Alias for getSupabaseAdmin for consistent naming
+ */
+export function getAdminClient(): SupabaseClient {
+  return getSupabaseAdmin()
+}
