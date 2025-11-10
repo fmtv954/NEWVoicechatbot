@@ -57,6 +57,18 @@ export default function HomePage() {
 
           <Card>
             <CardHeader>
+              <CardTitle>Leads</CardTitle>
+              <CardDescription>View captured leads from voice AI conversations</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button asChild variant="outline" className="w-full bg-transparent">
+                <Link href="/leads">View Leads</Link>
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
               <CardTitle>Agent Handoff</CardTitle>
               <CardDescription>Accept live call transfers from AI to human agent</CardDescription>
             </CardHeader>
