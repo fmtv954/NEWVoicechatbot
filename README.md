@@ -60,6 +60,7 @@ Required environment variables:
 - `TWILIO_AUTH_TOKEN` - Twilio auth token
 - `TWILIO_FROM_NUMBER` - Twilio phone number
 - `TAVILY_API_KEY` - Tavily search API key
+- `SLACK_WEBHOOK_URL` - Incoming webhook for human handoff notifications
 - `LIVEKIT_API_KEY` - LiveKit API key
 - `LIVEKIT_API_SECRET` - LiveKit API secret
 - `LIVEKIT_URL` - LiveKit server URL
@@ -80,6 +81,14 @@ pnpm dev
 6. Open [http://localhost:3000](http://localhost:3000) in your browser
 
 ## Development
+
+### Handoff Environment Checklist
+
+See `docs/HANDOFF_SETUP.md` for a step-by-step guide to:
+
+- Configure Slack + LiveKit environment variables
+- Run `pnpm tsx scripts/test-handoff-request.ts` to manually trigger `/api/handoff/request`
+- Confirm the Slack card and LiveKit join flow before a full call test
 
 ### Available Scripts
 

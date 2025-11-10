@@ -31,6 +31,12 @@ You need **3 API keys** to test the voice AI:
 - Get: Account SID, Auth Token, Phone Number
 - **Cost for testing:** ~$0.08 for 10 test SMS
 
+### 4b. Slack Incoming Webhook (FREE)
+- Go to https://api.slack.com/messaging/webhooks
+- Create/select an app and add the Incoming Webhooks feature
+- Copy the generated webhook URL → `SLACK_WEBHOOK_URL`
+- Choose the channel that should receive handoff alerts
+
 ### 5. LiveKit (FREE tier)
 - Sign up: https://cloud.livekit.io/
 - Create project
