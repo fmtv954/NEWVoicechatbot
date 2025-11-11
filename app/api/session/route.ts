@@ -1,6 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin"
-import { SUNNY_SYSTEM_PROMPT } from "@/lib/prompt"
 
 // Simple in-memory rate limiter for dev (IP-based)
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
@@ -106,21 +105,36 @@ export async function POST(req: NextRequest) {
           {
             type: "function",
             name: "requestHandoff",
-            description:
-              "Request handoff to a human agent when caller asks to speak with someone, requests booking, or issue is complex",
+            description: "Request handoff to a human agent when the caller asks to speak with someone",
             parameters: {
               type: "object",
               properties: {
-                reason: {
-                  type: "string",
-                  description: "Brief reason for handoff",
-                },
+                reason: { type: "string", description: "Reason for handoff request" },
               },
               required: ["reason"],
             },
           },
         ],
-        instructions: SUNNY_SYSTEM_PROMPT,
+        instructions: `You are a friendly AI assistant for a Voice AI Call Widget demo.
+
+Your personality:
+- Warm, professional, and conversational
+- Natural speech patterns with occasional "um" or "well" for authenticity
+- Patient and empathetic listener
+
+Core behaviors:
+1. Greet the caller warmly and ask how you can help
+2. Listen carefully using Voice Activity Detection (VAD) - never cut them off
+3. Provide helpful, concise answers to questions
+4. If asked about pricing or technical details you don't know, use searchWeb tool
+5. If caller provides contact info, use saveLead tool to save it
+6. If caller asks to speak with someone, use requestHandoff tool
+
+Important rules:
+- Never make up information - use searchWeb if unsure
+- Keep responses brief (1-2 sentences) to feel more conversational
+- Ask follow-up questions to understand their needs better
+- Always confirm information before using saveLead tool`,
       }),
     })
 

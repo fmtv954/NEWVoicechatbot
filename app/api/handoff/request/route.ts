@@ -1,14 +1,50 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabaseAdmin"
 import { sendSlackNotification } from "@/lib/slack"
-import jwt from "jsonwebtoken"
 import { pushEvent } from "@/lib/calls"
+
+async function createJWT(payload: any, secret: string): Promise<string> {
+  const header = { alg: "HS256", typ: "JWT" }
+
+  const base64url = (str: string) => btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")
+
+  const headerEncoded = base64url(JSON.stringify(header))
+  const payloadEncoded = base64url(JSON.stringify(payload))
+
+  const message = `${headerEncoded}.${payloadEncoded}`
+
+  const encoder = new TextEncoder()
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
+    "sign",
+  ])
+
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(message))
+
+  const signatureEncoded = base64url(String.fromCharCode(...new Uint8Array(signature)))
+
+  return `${message}.${signatureEncoded}`
+}
 
 export async function POST(request: NextRequest) {
   console.log("=".repeat(80))
   console.log("[Handoff] 🚨 NEW HANDOFF REQUEST RECEIVED")
   console.log("[Handoff] Timestamp:", new Date().toISOString())
   console.log("=".repeat(80))
+
+  if (!supabaseAdmin) {
+    console.error("[Handoff] ❌ supabaseAdmin not initialized")
+    return NextResponse.json({ error: "Database client initialization failed" }, { status: 500 })
+  }
+
+  if (!sendSlackNotification) {
+    console.error("[Handoff] ❌ sendSlackNotification not initialized")
+    return NextResponse.json({ error: "Slack client initialization failed" }, { status: 500 })
+  }
+
+  if (!pushEvent) {
+    console.error("[Handoff] ❌ pushEvent not initialized")
+    return NextResponse.json({ error: "Call events system initialization failed" }, { status: 500 })
+  }
 
   try {
     const body = await request.json()
@@ -138,7 +174,7 @@ export async function POST(request: NextRequest) {
     }
 
     console.log("[Handoff] 🔐 Generating JWT token...")
-    const token = jwt.sign(
+    const token = await createJWT(
       {
         ticket_id: ticket.id,
         campaign_id,
@@ -190,10 +226,7 @@ export async function POST(request: NextRequest) {
       console.error("[Handoff] ❌ Slack notification failed:", slackResult.error)
 
       console.log("[Handoff] 🧹 Cleaning up orphaned ticket after Slack failure...")
-      const { error: cleanupError } = await supabaseAdmin
-        .from("handoff_tickets")
-        .delete()
-        .eq("id", ticket.id)
+      const { error: cleanupError } = await supabaseAdmin.from("handoff_tickets").delete().eq("id", ticket.id)
 
       if (cleanupError) {
         console.error("[Handoff] ⚠ Failed to delete orphaned ticket:", cleanupError)

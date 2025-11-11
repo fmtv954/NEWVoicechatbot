@@ -1,75 +1,114 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { supabaseAdmin } from "@/lib/supabaseAdmin"
-import { AccessToken } from "livekit-server-sdk"
 
-/**
- * POST /api/handoff/customer-token
- * Mint LiveKit token for customer to join handoff room
- */
+// We'll generate LiveKit JWT tokens manually using Web Crypto API
+
+async function createLiveKitToken(
+  apiKey: string,
+  apiSecret: string,
+  identity: string,
+  roomName: string,
+  ttlSeconds = 600,
+): Promise<string> {
+  const now = Math.floor(Date.now() / 1000)
+
+  // LiveKit JWT structure
+  const header = {
+    alg: "HS256",
+    typ: "JWT",
+  }
+
+  const payload = {
+    exp: now + ttlSeconds, // Token expiration
+    iss: apiKey, // API key is the issuer
+    sub: identity, // Participant identity
+    nbf: now, // Not valid before now
+    video: {
+      // LiveKit video grant
+      roomJoin: true,
+      room: roomName,
+      canPublish: true,
+      canSubscribe: true,
+      canPublishData: true,
+      canUpdateOwnMetadata: true,
+    },
+  }
+
+  // Encode header and payload
+  const base64UrlEncode = (obj: any) => {
+    const json = JSON.stringify(obj)
+    return btoa(json).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+  }
+
+  const encodedHeader = base64UrlEncode(header)
+  const encodedPayload = base64UrlEncode(payload)
+  const message = `${encodedHeader}.${encodedPayload}`
+
+  // Sign with HMAC SHA-256
+  const encoder = new TextEncoder()
+  const keyData = encoder.encode(apiSecret)
+  const messageData = encoder.encode(message)
+
+  const cryptoKey = await crypto.subtle.importKey("raw", keyData, { name: "HMAC", hash: "SHA-256" }, false, ["sign"])
+
+  const signature = await crypto.subtle.sign("HMAC", cryptoKey, messageData)
+
+  // Convert signature to base64url
+  const signatureArray = new Uint8Array(signature)
+  const signatureBase64 = btoa(String.fromCharCode(...signatureArray))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "")
+
+  return `${message}.${signatureBase64}`
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { ticket_id, call_id } = body
+    const { ticket_id } = body
 
-    if (!ticket_id || !call_id) {
-      return NextResponse.json({ error: "Missing ticket_id or call_id" }, { status: 400 })
+    console.log("[CustomerToken] 🎫 Customer token request for ticket:", ticket_id)
+
+    if (!ticket_id) {
+      return NextResponse.json({ error: "Missing ticket_id" }, { status: 400 })
     }
 
-    // Verify ticket exists and is accepted
-    const { data: ticket, error: ticketError } = await supabaseAdmin
-      .from("handoff_tickets")
-      .select("*")
-      .eq("id", ticket_id)
-      .single()
+    // Validate LiveKit credentials
+    const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY
+    const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET
+    const LIVEKIT_URL = process.env.LIVEKIT_URL
 
-    if (ticketError || !ticket) {
-      return NextResponse.json({ error: "Ticket not found" }, { status: 404 })
-    }
-
-    if (ticket.status !== "accepted") {
-      return NextResponse.json({ error: `Ticket not yet accepted (status: ${ticket.status})` }, { status: 400 })
-    }
-
-    // Check LiveKit credentials
-    const livekitApiKey = process.env.LIVEKIT_API_KEY
-    const livekitApiSecret = process.env.LIVEKIT_API_SECRET
-    const livekitUrl = process.env.LIVEKIT_URL
-
-    if (!livekitApiKey || !livekitApiSecret || !livekitUrl) {
-      console.error("[Customer Token] LiveKit credentials not configured")
+    if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET) {
+      console.error("[CustomerToken] Missing LiveKit credentials")
       return NextResponse.json({ error: "LiveKit not configured" }, { status: 500 })
     }
 
-    // Create room name and participant identity
+    // Room name is the ticket ID
     const roomName = `handoff-${ticket_id}`
-    const participantName = `customer-${call_id}`
+    const customerIdentity = `customer-${ticket_id}`
 
-    console.log("[Customer Token] Minting token:", { roomName, participantName })
+    console.log("[CustomerToken] Creating token for:", { roomName, identity: customerIdentity })
 
-    // Create LiveKit access token
-    const accessToken = new AccessToken(livekitApiKey, livekitApiSecret, {
-      identity: participantName,
-    })
+    const token = await createLiveKitToken(
+      LIVEKIT_API_KEY,
+      LIVEKIT_API_SECRET,
+      customerIdentity,
+      roomName,
+      600, // 10 minutes
+    )
 
-    accessToken.addGrant({
-      room: roomName,
-      roomJoin: true,
-      canPublish: true,
-      canSubscribe: true,
-    })
-
-    const livekitToken = await accessToken.toJwt()
-
-    console.log("[Customer Token] ✓ Token minted successfully")
+    console.log("[CustomerToken] ✅ Token created successfully")
 
     return NextResponse.json({
-      ok: true,
-      room_name: roomName,
-      livekit_token: livekitToken,
-      livekit_url: livekitUrl,
+      token,
+      room: roomName,
+      url: LIVEKIT_URL,
     })
   } catch (error) {
-    console.error("[Customer Token] Failed:", error)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+    console.error("[CustomerToken] Error:", error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Failed to create token" },
+      { status: 500 },
+    )
   }
 }

@@ -4,8 +4,6 @@
  * Handles getUserMedia, ring tone, session creation, and WebRTC connection
  */
 
-import { Room, RoomEvent, Track } from "livekit-client"
-
 type CallClientConfig = {
   agentId: string
   campaignId: string
@@ -55,8 +53,11 @@ class CallClient {
   private handoffInProgress = false
   private pendingHandoffSilenceAck = false
   private handoffSilenceAckTimeout: NodeJS.Timeout | null = null
-  private livekitRoom: Room | null = null
+
+  private livekitRoom: any | null = null
   private livekitTicketId: string | null = null
+  private handoffTimeoutTimer: NodeJS.Timeout | null = null
+  private agentJoined = false
 
   constructor(config: CallClientConfig) {
     this.config = config
@@ -524,11 +525,17 @@ class CallClient {
     }
 
     if (this.livekitRoom) {
-      console.log("[v0] Disconnecting from LiveKit room")
       this.livekitRoom.disconnect()
       this.livekitRoom = null
     }
+
+    if (this.handoffTimeoutTimer) {
+      clearTimeout(this.handoffTimeoutTimer)
+      this.handoffTimeoutTimer = null
+    }
+
     this.livekitTicketId = null
+    this.agentJoined = false
 
     // Stop timer
     if (this.timerInterval) {
@@ -1015,13 +1022,13 @@ class CallClient {
       const result = await response.json()
       console.log("[v0] ✅ Handoff request successful:", result)
 
+      this.livekitTicketId = result.ticket_id
+
       this.emit("handoff_requested", {
         ticket_id: result.ticket_id,
         reason: args.reason,
         slackMessage: result.slackMessage,
       })
-
-      this.livekitTicketId = result.ticket_id
 
       this.enterHandoffMode()
 
@@ -1263,74 +1270,50 @@ class CallClient {
     }
   }
 
-  /**
-   * Enter handoff mode: Silence AI and bridge customer to LiveKit
-   */
   private enterHandoffMode(): void {
     if (this.handoffInProgress) {
       return
     }
 
-    console.log("[v0] 🤫 Entering handoff mode - silencing AI and preparing audio bridge")
+    console.log("[v0] 🤫 Entering handoff mode - silencing AI responses")
 
     this.handoffInProgress = true
 
-    console.log("[v0] 🔊 Speaking handoff message to customer...")
-    this.sendRealtimeEvent({
-      type: "response.create",
-      response: {
-        modalities: ["audio"],
-        instructions: 'Say: "Connecting you to an agent now, one moment please."',
-      },
-    })
+    if (this.remoteAudioElement) {
+      this.remoteAudioElement.muted = true
+      this.remoteAudioElement.volume = 0
+    }
 
-    // Wait for TTS to complete before silencing
-    setTimeout(() => {
-      // Mute AI audio output
-      if (this.remoteAudioElement) {
-        this.remoteAudioElement.muted = true
-        this.remoteAudioElement.volume = 0
-      }
+    this.aiIsSpeaking = false
+    this.aiIsProcessing = false
+    this.updateDiagnostics()
+    this.updateProcessingState()
 
-      this.aiIsSpeaking = false
-      this.aiIsProcessing = false
-      this.updateDiagnostics()
-      this.updateProcessingState()
+    this.sendRealtimeEvent({ type: "response.cancel" })
 
-      // Cancel any pending AI responses
-      this.sendRealtimeEvent({ type: "response.cancel" })
+    // The session.update was causing errors, we'll just cancel any AI responses
 
-      // Watch for AI silence acknowledgment
-      this.watchForHandoffSilenceAck()
+    this.bridgeToLiveKit()
 
-      // Update session to silence AI
-      this.sendRealtimeEvent({
-        type: "session.update",
-        session: {
-          instructions:
-            "The conversation has been handed off to a human agent. Continue transcribing the caller's audio but do not speak or respond.",
-        },
-      })
-
-      console.log("[v0] 🌉 Bridging customer to LiveKit room...")
-      this.bridgeToLiveKit()
-    }, 3000) // 3 seconds for TTS message
+    this.startHandoffTimeout()
   }
 
-  /**
-   * Bridge customer audio to LiveKit room for handoff
-   */
   private async bridgeToLiveKit(): Promise<void> {
-    if (!this.livekitTicketId || !this.callId) {
-      console.error("[v0] Cannot bridge to LiveKit: missing ticket_id or call_id")
-      this.config.onError?.("Handoff setup failed - missing credentials")
+    console.log("[v0] 🌉 Bridging customer to LiveKit room...")
+
+    if (!this.livekitTicketId) {
+      console.error("[v0] Cannot bridge: no ticket ID")
+      return
+    }
+
+    if (!this.callId) {
+      console.error("[v0] Cannot bridge: no call ID")
       return
     }
 
     try {
+      // Get customer token from API
       console.log("[v0] 🎫 Fetching customer LiveKit token...")
-
-      // Fetch customer token
       const tokenResponse = await fetch("/api/handoff/customer-token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1345,72 +1328,144 @@ class CallClient {
         throw new Error(errorData.error || "Failed to get customer token")
       }
 
-      const { room_name, livekit_token, livekit_url } = await tokenResponse.json()
+      const { token, room, url } = await tokenResponse.json()
+      console.log("[v0] ✓ Customer token received")
+      console.log("[v0] - Room:", room)
+      console.log("[v0] - URL:", url)
 
-      console.log("[v0] ✓ Customer token received:", { room_name, livekit_url })
-
-      const livekitWsUrl = livekit_url || process.env.NEXT_PUBLIC_LIVEKIT_URL
-
-      if (!livekitWsUrl) {
-        throw new Error("LiveKit URL not configured")
-      }
+      // Dynamically import LiveKit SDK
+      const { Room, RoomEvent } = await import("livekit-client")
 
       // Create LiveKit room instance
-      this.livekitRoom = new Room({
-        adaptiveStream: true,
-        dynacast: true,
+      this.livekitRoom = new Room()
+
+      // Listen for agent joining
+      this.livekitRoom.on(RoomEvent.ParticipantConnected, (participant: any) => {
+        console.log("[v0] 👤 Participant joined LiveKit room:", participant.identity)
+
+        if (participant.identity.startsWith("agent-")) {
+          console.log("[v0] 🎉 HUMAN AGENT JOINED!")
+          this.agentJoined = true
+
+          // Cancel timeout since agent joined
+          if (this.handoffTimeoutTimer) {
+            clearTimeout(this.handoffTimeoutTimer)
+            this.handoffTimeoutTimer = null
+          }
+
+          this.emit("agent_joined", { identity: participant.identity })
+
+          // Notify customer
+          this.speakToCustomer("You're now connected with a live agent.")
+        }
       })
 
-      // Set up event listeners
-      this.livekitRoom.on(RoomEvent.Connected, () => {
-        console.log("[v0] ✓ Customer connected to LiveKit room")
-        this.emit("handoff_audio_connected", { room_name })
+      // Listen for agent leaving
+      this.livekitRoom.on(RoomEvent.ParticipantDisconnected, (participant: any) => {
+        console.log("[v0] 👤 Participant left LiveKit room:", participant.identity)
+
+        if (participant.identity.startsWith("agent-")) {
+          console.log("[v0] Agent disconnected")
+          this.emit("agent_left", { identity: participant.identity })
+        }
       })
 
-      this.livekitRoom.on(RoomEvent.Disconnected, () => {
-        console.log("[v0] Customer disconnected from LiveKit room")
-        this.emit("handoff_audio_disconnected")
-      })
+      // Listen for remote audio tracks
+      this.livekitRoom.on(RoomEvent.TrackSubscribed, (track: any, publication: any, participant: any) => {
+        console.log("[v0] 🎧 Subscribed to track:", track.kind, "from", participant.identity)
 
-      this.livekitRoom.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
-        console.log("[v0] 🎧 Subscribed to agent audio track:", participant.identity)
+        if (track.kind === "audio" && participant.identity.startsWith("agent-")) {
+          console.log("[v0] 🎧 Subscribed to agent audio track")
 
-        if (track.kind === Track.Kind.Audio) {
-          // Attach agent audio to Audio element
+          // Play agent audio through existing audio element
           const audioElement = track.attach()
           audioElement.autoplay = true
           audioElement.volume = 1.0
           document.body.appendChild(audioElement)
 
-          console.log("[v0] ✓ Agent audio playing")
+          console.log("[v0] ✅ Agent audio playing")
         }
       })
 
       // Connect to room
-      console.log("[v0] 🔌 Connecting to LiveKit room:", room_name)
-      await this.livekitRoom.connect(livekitWsUrl, livekit_token)
+      console.log("[v0] 🔌 Connecting to LiveKit room...")
+      await this.livekitRoom.connect(url, token)
+      console.log("[v0] ✓ Customer connected to LiveKit room")
 
-      // Publish customer microphone
+      // Publish customer's microphone track
       if (this.localStream) {
         const audioTrack = this.localStream.getAudioTracks()[0]
 
         console.log("[v0] 🎤 Publishing customer microphone to LiveKit room")
-        await this.livekitRoom.localParticipant.publishTrack(audioTrack, {
-          name: "customer-audio",
-          source: Track.Source.Microphone,
-        })
+        await this.livekitRoom.localParticipant.publishTrack(audioTrack)
+        console.log("[v0] ✅ Customer audio bridge complete")
 
-        console.log("[v0] ✅ Customer audio bridge complete - agent can now hear customer")
-        this.emit("handoff_bridge_complete", { room_name })
-      } else {
-        throw new Error("No local microphone stream available")
+        this.emit("customer_joined_livekit", { room, ticket_id: this.livekitTicketId })
       }
     } catch (error) {
       console.error("[v0] ❌ Failed to bridge to LiveKit:", error)
-      this.config.onError?.(error instanceof Error ? error.message : "Failed to connect to agent")
-      this.emit("handoff_bridge_failed", {
-        error: error instanceof Error ? error.message : "Unknown error",
-      })
+      this.emit("livekit_bridge_error", { error: error instanceof Error ? error.message : "Unknown error" })
+    }
+  }
+
+  private startHandoffTimeout(): void {
+    console.log("[v0] ⏱️ Starting 90-second handoff timeout...")
+
+    this.handoffTimeoutTimer = setTimeout(() => {
+      if (!this.agentJoined) {
+        console.log("[v0] ⏰ Handoff timeout - no agent joined in 90 seconds")
+        this.handleHandoffTimeout()
+      }
+    }, 90000) // 90 seconds
+  }
+
+  private handleHandoffTimeout(): void {
+    console.log("[v0] 🚨 Handling handoff timeout...")
+
+    this.emit("handoff_timeout", { ticket_id: this.livekitTicketId })
+
+    // Disconnect from LiveKit
+    if (this.livekitRoom) {
+      this.livekitRoom.disconnect()
+      this.livekitRoom = null
+    }
+
+    // Speak fallback message
+    this.speakToCustomer(
+      "I apologize, all of our agents are currently busy. We have your information and someone will call you back shortly. Thank you for your patience.",
+    )
+
+    // Log timeout event
+    if (this.callId) {
+      fetch("/api/calls/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          call_id: this.callId,
+          type: "handoff_timeout",
+          payload: { ticket_id: this.livekitTicketId },
+        }),
+      }).catch((err) => console.error("[v0] Failed to log handoff_timeout event:", err))
+    }
+
+    // End call after 3 seconds
+    setTimeout(() => {
+      this.end()
+    }, 3000)
+  }
+
+  private speakToCustomer(message: string): void {
+    console.log("[v0] 🔊 Speaking to customer:", message)
+
+    // Use Web Speech API for TTS
+    if ("speechSynthesis" in window) {
+      const utterance = new SpeechSynthesisUtterance(message)
+      utterance.rate = 1.0
+      utterance.pitch = 1.0
+      utterance.volume = 1.0
+      window.speechSynthesis.speak(utterance)
+    } else {
+      console.warn("[v0] Web Speech API not available")
     }
   }
 }
