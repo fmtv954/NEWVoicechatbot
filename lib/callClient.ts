@@ -58,6 +58,7 @@ class CallClient {
   private livekitTicketId: string | null = null
   private handoffTimeoutTimer: NodeJS.Timeout | null = null
   private agentJoined = false
+  private livekitAgentAudioElement: HTMLAudioElement | null = null
 
   constructor(config: CallClientConfig) {
     this.config = config
@@ -527,6 +528,15 @@ class CallClient {
     if (this.livekitRoom) {
       this.livekitRoom.disconnect()
       this.livekitRoom = null
+    }
+
+    if (this.livekitAgentAudioElement) {
+      this.livekitAgentAudioElement.pause()
+      this.livekitAgentAudioElement.srcObject = null
+      if (this.livekitAgentAudioElement.parentNode) {
+        this.livekitAgentAudioElement.parentNode.removeChild(this.livekitAgentAudioElement)
+      }
+      this.livekitAgentAudioElement = null
     }
 
     if (this.handoffTimeoutTimer) {
@@ -1272,16 +1282,20 @@ class CallClient {
 
   private enterHandoffMode(): void {
     if (this.handoffInProgress) {
+      console.log("[v0] ⚠️ enterHandoffMode called but already in progress")
       return
     }
 
-    console.log("[v0] 🤫 Entering handoff mode - silencing AI responses")
+    console.log("[v0] 🚨 ENTER HANDOFF MODE CALLED")
+    console.log("[v0] - livekitTicketId:", this.livekitTicketId)
+    console.log("[v0] - callId:", this.callId)
 
     this.handoffInProgress = true
 
     if (this.remoteAudioElement) {
       this.remoteAudioElement.muted = true
       this.remoteAudioElement.volume = 0
+      console.log("[v0] ✓ Muted OpenAI remote audio")
     }
 
     this.aiIsSpeaking = false
@@ -1290,30 +1304,48 @@ class CallClient {
     this.updateProcessingState()
 
     this.sendRealtimeEvent({ type: "response.cancel" })
+    console.log("[v0] ✓ Sent response.cancel to OpenAI")
 
     // The session.update was causing errors, we'll just cancel any AI responses
 
-    this.bridgeToLiveKit()
+    console.log("[v0] 🔗 About to call bridgeToLiveKit()...")
+    this.bridgeToLiveKit().catch((err) => {
+      console.error("[v0] ❌ bridgeToLiveKit failed:", err)
+      this.emit("livekit_bridge_error", { error: err.message })
+    })
 
     this.startHandoffTimeout()
+    console.log("[v0] ✓ Started 90s handoff timeout")
   }
 
   private async bridgeToLiveKit(): Promise<void> {
-    console.log("[v0] 🌉 Bridging customer to LiveKit room...")
+    console.log("[v0] ============================================")
+    console.log("[v0] 🌉 BRIDGE TO LIVEKIT - START")
+    console.log("[v0] ============================================")
 
     if (!this.livekitTicketId) {
-      console.error("[v0] Cannot bridge: no ticket ID")
-      return
+      console.error("[v0] ❌ FATAL: Cannot bridge - no ticket ID")
+      throw new Error("No ticket ID available for LiveKit bridge")
     }
 
     if (!this.callId) {
-      console.error("[v0] Cannot bridge: no call ID")
-      return
+      console.error("[v0] ❌ FATAL: Cannot bridge - no call ID")
+      throw new Error("No call ID available for LiveKit bridge")
     }
 
+    console.log("[v0] ✓ Prerequisites check passed")
+    console.log("[v0] - Ticket ID:", this.livekitTicketId)
+    console.log("[v0] - Call ID:", this.callId)
+
     try {
-      // Get customer token from API
-      console.log("[v0] 🎫 Fetching customer LiveKit token...")
+      console.log("[v0] 📡 STEP 1: Fetching customer LiveKit token...")
+      console.log("[v0] - Endpoint: /api/handoff/customer-token")
+      console.log("[v0] - Method: POST")
+      console.log("[v0] - Payload:", {
+        ticket_id: this.livekitTicketId,
+        call_id: this.callId,
+      })
+
       const tokenResponse = await fetch("/api/handoff/customer-token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1323,88 +1355,153 @@ class CallClient {
         }),
       })
 
+      console.log("[v0] 📥 Token response received")
+      console.log("[v0] - Status:", tokenResponse.status)
+      console.log("[v0] - Status Text:", tokenResponse.statusText)
+      console.log("[v0] - Headers:", Object.fromEntries(tokenResponse.headers.entries()))
+
       if (!tokenResponse.ok) {
+        // FIX: undeclared variable 'response'
         const errorData = await tokenResponse.json()
+        console.error("[v0] ❌ Token request failed:", errorData)
         throw new Error(errorData.error || "Failed to get customer token")
       }
 
       const { token, room, url } = await tokenResponse.json()
-      console.log("[v0] ✓ Customer token received")
-      console.log("[v0] - Room:", room)
-      console.log("[v0] - URL:", url)
+      console.log("[v0] ✅ Customer token received successfully")
+      console.log("[v0] - Room name:", room)
+      console.log("[v0] - LiveKit URL:", url)
+      console.log("[v0] - Token length:", token?.length || 0)
+      console.log("[v0] - Token prefix:", token?.substring(0, 30) + "...")
 
-      // Dynamically import LiveKit SDK
+      console.log("[v0] 📦 STEP 2: Importing LiveKit SDK...")
       const { Room, RoomEvent } = await import("livekit-client")
+      console.log("[v0] ✓ LiveKit SDK imported successfully")
 
-      // Create LiveKit room instance
+      console.log("[v0] 🏗️ STEP 3: Creating LiveKit room instance...")
       this.livekitRoom = new Room()
+      console.log("[v0] ✓ Room instance created")
 
-      // Listen for agent joining
+      console.log("[v0] 📻 STEP 4: Setting up event listeners...")
+
       this.livekitRoom.on(RoomEvent.ParticipantConnected, (participant: any) => {
-        console.log("[v0] 👤 Participant joined LiveKit room:", participant.identity)
+        console.log("[v0] 🎉 EVENT: ParticipantConnected")
+        console.log("[v0] - Identity:", participant.identity)
+        console.log("[v0] - SID:", participant.sid)
 
         if (participant.identity.startsWith("agent-")) {
-          console.log("[v0] 🎉 HUMAN AGENT JOINED!")
+          console.log("[v0] 🎊 HUMAN AGENT JOINED THE ROOM!")
           this.agentJoined = true
 
-          // Cancel timeout since agent joined
           if (this.handoffTimeoutTimer) {
             clearTimeout(this.handoffTimeoutTimer)
             this.handoffTimeoutTimer = null
+            console.log("[v0] ✓ Cancelled 90s timeout")
           }
 
           this.emit("agent_joined", { identity: participant.identity })
-
-          // Notify customer
           this.speakToCustomer("You're now connected with a live agent.")
         }
       })
 
-      // Listen for agent leaving
       this.livekitRoom.on(RoomEvent.ParticipantDisconnected, (participant: any) => {
-        console.log("[v0] 👤 Participant left LiveKit room:", participant.identity)
+        console.log("[v0] 👋 EVENT: ParticipantDisconnected")
+        console.log("[v0] - Identity:", participant.identity)
 
         if (participant.identity.startsWith("agent-")) {
-          console.log("[v0] Agent disconnected")
+          console.log("[v0] Agent left the room")
           this.emit("agent_left", { identity: participant.identity })
         }
       })
 
-      // Listen for remote audio tracks
       this.livekitRoom.on(RoomEvent.TrackSubscribed, (track: any, publication: any, participant: any) => {
-        console.log("[v0] 🎧 Subscribed to track:", track.kind, "from", participant.identity)
+        console.log("[v0] 🎧 EVENT: TrackSubscribed")
+        console.log("[v0] - Track kind:", track.kind)
+        console.log("[v0] - From participant:", participant.identity)
 
         if (track.kind === "audio" && participant.identity.startsWith("agent-")) {
-          console.log("[v0] 🎧 Subscribed to agent audio track")
+          console.log("[v0] 🎵 Agent audio track received - setting up playback...")
 
-          // Play agent audio through existing audio element
-          const audioElement = track.attach()
-          audioElement.autoplay = true
-          audioElement.volume = 1.0
-          document.body.appendChild(audioElement)
+          if (!this.livekitAgentAudioElement) {
+            this.livekitAgentAudioElement = new Audio()
+            this.livekitAgentAudioElement.autoplay = true
+            this.livekitAgentAudioElement.volume = 1.0
+            this.livekitAgentAudioElement.style.display = "none"
+            document.body.appendChild(this.livekitAgentAudioElement)
+            console.log("[v0] ✓ Created audio element for agent")
+          }
 
-          console.log("[v0] ✅ Agent audio playing")
+          const mediaStream = new MediaStream([track.mediaStreamTrack])
+          this.livekitAgentAudioElement.srcObject = mediaStream
+          console.log("[v0] ✓ Set agent audio srcObject")
+
+          this.livekitAgentAudioElement
+            .play()
+            .then(() => {
+              console.log("[v0] ✅ AGENT AUDIO PLAYING")
+              console.log("[v0] - Volume:", this.livekitAgentAudioElement!.volume)
+              console.log("[v0] - Paused:", this.livekitAgentAudioElement!.paused)
+              console.log("[v0] - Muted:", this.livekitAgentAudioElement!.muted)
+            })
+            .catch((err) => {
+              console.error("[v0] ❌ Agent audio play failed:", err)
+              if (this.audioContext && this.audioContext.state === "suspended") {
+                console.log("[v0] Attempting to resume AudioContext...")
+                this.audioContext.resume().then(() => {
+                  console.log("[v0] AudioContext resumed, retrying play...")
+                  this.livekitAgentAudioElement!.play().catch((retryErr) => {
+                    console.error("[v0] Retry failed:", retryErr)
+                  })
+                })
+              }
+            })
         }
       })
 
-      // Connect to room
-      console.log("[v0] 🔌 Connecting to LiveKit room...")
-      await this.livekitRoom.connect(url, token)
-      console.log("[v0] ✓ Customer connected to LiveKit room")
+      console.log("[v0] ✓ Event listeners registered")
 
-      // Publish customer's microphone track
+      console.log("[v0] 🔌 STEP 5: Connecting to LiveKit room...")
+      console.log("[v0] - Room name:", room)
+      console.log("[v0] - WebSocket URL:", url)
+
+      await this.livekitRoom.connect(url, token)
+
+      console.log("[v0] ✅ CONNECTED TO LIVEKIT ROOM")
+      console.log("[v0] - Local participant SID:", this.livekitRoom.localParticipant.sid)
+      console.log("[v0] - Local participant identity:", this.livekitRoom.localParticipant.identity)
+      console.log("[v0] - Room name:", this.livekitRoom.name)
+      console.log("[v0] - Remote participants count:", this.livekitRoom.remoteParticipants.size)
+
       if (this.localStream) {
         const audioTrack = this.localStream.getAudioTracks()[0]
 
-        console.log("[v0] 🎤 Publishing customer microphone to LiveKit room")
+        console.log("[v0] 🎤 STEP 6: Publishing customer microphone...")
+        console.log("[v0] - Track ID:", audioTrack.id)
+        console.log("[v0] - Track label:", audioTrack.label)
+        console.log("[v0] - Track enabled:", audioTrack.enabled)
+        console.log("[v0] - Track readyState:", audioTrack.readyState)
+        console.log("[v0] - Track muted:", audioTrack.muted)
+
         await this.livekitRoom.localParticipant.publishTrack(audioTrack)
-        console.log("[v0] ✅ Customer audio bridge complete")
+
+        console.log("[v0] ✅ CUSTOMER MICROPHONE PUBLISHED")
+        console.log("[v0] ============================================")
+        console.log("[v0] 🎉 CUSTOMER AUDIO BRIDGE COMPLETE")
+        console.log("[v0] ============================================")
 
         this.emit("customer_joined_livekit", { room, ticket_id: this.livekitTicketId })
+      } else {
+        console.error("[v0] ❌ No local stream available to publish")
+        throw new Error("No local stream available")
       }
     } catch (error) {
-      console.error("[v0] ❌ Failed to bridge to LiveKit:", error)
+      console.error("[v0] ============================================")
+      console.error("[v0] ❌ BRIDGE TO LIVEKIT - FAILED")
+      console.error("[v0] ============================================")
+      console.error("[v0] Error:", error)
+      console.error("[v0] Error stack:", error instanceof Error ? error.stack : "No stack trace")
       this.emit("livekit_bridge_error", { error: error instanceof Error ? error.message : "Unknown error" })
+      throw error
     }
   }
 
