@@ -1,117 +1,172 @@
 import { type NextRequest, NextResponse } from "next/server"
+import { getSupabaseAdmin } from "@/lib/supabaseAdmin"
 import { SUNNY_SYSTEM_PROMPT } from "@/lib/prompt"
-import { tools } from "@/lib/tools"
-import { startCall } from "@/lib/calls"
 
-// Simple IP-based rate limiter for dev (in-memory)
+// Simple in-memory rate limiter for dev (IP-based)
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
-const RATE_LIMIT_WINDOW_MS = 60 * 1000 // 1 minute
-const MAX_REQUESTS_PER_WINDOW = 10
 
 function checkRateLimit(ip: string): boolean {
   const now = Date.now()
-  const record = rateLimitMap.get(ip)
+  const limit = rateLimitMap.get(ip)
 
-  if (!record || now > record.resetAt) {
-    // New window
-    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS })
+  if (!limit || now > limit.resetAt) {
+    // Reset or create new limit
+    rateLimitMap.set(ip, { count: 1, resetAt: now + 60000 }) // 60 seconds
     return true
   }
 
-  if (record.count >= MAX_REQUESTS_PER_WINDOW) {
+  if (limit.count >= 10) {
+    // Rate limit exceeded
     return false
   }
 
-  record.count++
+  // Increment count
+  limit.count++
   return true
 }
 
+/**
+ * POST /api/session
+ * Create an OpenAI Realtime session and log the call in database
+ */
 export async function POST(req: NextRequest) {
-  // Get client IP for rate limiting
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0] || req.headers.get("x-real-ip") || "unknown"
-
-  // Check rate limit
-  if (!checkRateLimit(ip)) {
-    return NextResponse.json({ error: "Too many requests. Please try again later." }, { status: 429 })
-  }
-
-  // Parse and validate request body
-  let body: { agent_id?: string; campaign_id?: string }
   try {
-    body = await req.json()
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 })
-  }
-
-  const { agent_id, campaign_id } = body
-
-  // Validate required fields
-  if (!agent_id || typeof agent_id !== "string") {
-    return NextResponse.json({ error: "Missing or invalid agent_id" }, { status: 400 })
-  }
-
-  if (!campaign_id || typeof campaign_id !== "string") {
-    return NextResponse.json({ error: "Missing or invalid campaign_id" }, { status: 400 })
-  }
-
-  // Validate UUID format (basic check)
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-  if (!uuidRegex.test(agent_id) || !uuidRegex.test(campaign_id)) {
-    return NextResponse.json({ error: "Invalid UUID format for agent_id or campaign_id" }, { status: 400 })
-  }
-
-  // Check for OpenAI API key
-  const openaiApiKey = process.env.OPENAI_API_KEY
-  if (!openaiApiKey) {
-    console.error("[v0] Missing OPENAI_API_KEY environment variable")
-    return NextResponse.json({ error: "Server configuration error" }, { status: 500 })
-  }
-
-  try {
-    const callId = await startCall({ agent_id, campaign_id })
-
-    if (!callId) {
-      console.error("[v0] Failed to start call tracking")
-      return NextResponse.json({ error: "Failed to initialize call" }, { status: 500 })
+    // Rate limiting in dev mode
+    if (process.env.NODE_ENV !== "production") {
+      const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown"
+      if (!checkRateLimit(ip)) {
+        return NextResponse.json({ error: "Rate limit exceeded. Try again in 60 seconds." }, { status: 429 })
+      }
     }
 
-    // Create OpenAI Realtime session
-    const response = await fetch("https://api.openai.com/v1/realtime/sessions", {
+    const { agent_id, campaign_id } = await req.json()
+
+    if (!agent_id || !campaign_id) {
+      return NextResponse.json({ error: "Missing required fields: agent_id, campaign_id" }, { status: 400 })
+    }
+
+    // Validate OpenAI API key
+    const openaiKey = process.env.OPENAI_API_KEY
+    if (!openaiKey) {
+      console.error("[v0] OPENAI_API_KEY not configured")
+      return NextResponse.json({ error: "OpenAI API key not configured" }, { status: 500 })
+    }
+
+    // Create session with OpenAI Realtime API
+    const sessionResponse = await fetch("https://api.openai.com/v1/realtime/sessions", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${openaiApiKey}`,
+        Authorization: `Bearer ${openaiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         model: "gpt-4o-realtime-preview-2024-12-17",
-        voice: "sage",
-        instructions: SUNNY_SYSTEM_PROMPT,
-        tools: tools,
+        voice: "verse",
+        turn_detection: {
+          type: "server_vad",
+          threshold: 0.5,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 500,
+        },
+        input_audio_format: "pcm16",
+        output_audio_format: "pcm16",
         input_audio_transcription: {
           model: "whisper-1",
         },
-        turn_detection: { type: "server_vad", threshold: 0.5 },
-        modalities: ["text", "audio"],
+        tools: [
+          {
+            type: "function",
+            name: "saveLead",
+            description: "Save lead information when the caller provides their contact details",
+            parameters: {
+              type: "object",
+              properties: {
+                first_name: { type: "string", description: "First name" },
+                last_name: { type: "string", description: "Last name" },
+                email: { type: "string", description: "Email address" },
+                phone: { type: "string", description: "Phone number" },
+                reason: { type: "string", description: "Reason for calling" },
+                transcript: { type: "string", description: "Full conversation transcript" },
+              },
+              required: ["first_name"],
+            },
+          },
+          {
+            type: "function",
+            name: "searchWeb",
+            description: "Search the web for information the caller is asking about",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string", description: "Search query" },
+              },
+              required: ["query"],
+            },
+          },
+          {
+            type: "function",
+            name: "requestHandoff",
+            description:
+              "Request handoff to a human agent when caller asks to speak with someone, requests booking, or issue is complex",
+            parameters: {
+              type: "object",
+              properties: {
+                reason: {
+                  type: "string",
+                  description: "Brief reason for handoff",
+                },
+              },
+              required: ["reason"],
+            },
+          },
+        ],
+        instructions: SUNNY_SYSTEM_PROMPT,
       }),
     })
 
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error("[v0] OpenAI API error:", response.status, errorText)
-      return NextResponse.json({ error: "Failed to create session with OpenAI" }, { status: 500 })
+    if (!sessionResponse.ok) {
+      const errorText = await sessionResponse.text()
+      console.error("[v0] OpenAI session creation failed:", sessionResponse.status, errorText)
+      return NextResponse.json({ error: "Failed to create OpenAI session" }, { status: sessionResponse.status })
     }
 
-    const sessionData = await response.json()
+    const sessionData = await sessionResponse.json()
+    const sessionClientSecret = sessionData.client_secret?.value
+
+    if (!sessionClientSecret) {
+      console.error("[v0] No client_secret in OpenAI response")
+      return NextResponse.json({ error: "Invalid session response from OpenAI" }, { status: 500 })
+    }
+
+    // Log the call in database
+    const supabase = getSupabaseAdmin()
+    const { data: call, error: callError } = await supabase
+      .from("calls")
+      .insert({
+        agent_id,
+        campaign_id,
+        status: "ringing",
+        started_at: new Date().toISOString(),
+      })
+      .select()
+      .single()
+
+    if (callError) {
+      console.error("[v0] Failed to create call record:", callError)
+      return NextResponse.json({ error: "Failed to create call record" }, { status: 500 })
+    }
+
+    console.log("[v0] Session created successfully, callId:", call.id)
 
     return NextResponse.json({
-      callId,
-      sessionClientSecret: sessionData.client_secret?.value || "",
+      callId: call.id,
+      sessionClientSecret,
       rtcConfiguration: {
         iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
       },
     })
   } catch (error) {
-    console.error("[v0] Error creating OpenAI session:", error)
+    console.error("[v0] Error in /api/session:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
 }

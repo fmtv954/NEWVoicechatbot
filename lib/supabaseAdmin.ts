@@ -19,3 +19,11 @@ export const supabaseAdmin = createClient(process.env.SUPABASE_URL, process.env.
     persistSession: false,
   },
 })
+
+/**
+ * Get the Supabase Admin client
+ * @returns Supabase admin client with service role key
+ */
+export function getSupabaseAdmin() {
+  return supabaseAdmin
+}

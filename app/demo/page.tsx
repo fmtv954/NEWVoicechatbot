@@ -1,36 +1,21 @@
-import { Suspense } from "react"
-import { supabaseAdmin } from "@/lib/supabaseAdmin"
 import DemoCallCard from "./demo-call-card"
 
-async function getCampaign() {
-  const { data: campaign, error } = await supabaseAdmin
-    .from("campaigns")
-    .select("id, agent_id, name")
-    .eq("id", "c0000000-0000-0000-0000-000000000001")
-    .single()
-
-  if (error || !campaign) {
-    throw new Error("Demo campaign not found. Run SQL seed scripts first.")
-  }
-
-  return campaign
-}
-
-export default async function DemoPage() {
-  const campaign = await getCampaign()
+export default function DemoPage() {
+  const demoAgentId = process.env.DEMO_AGENT_ID || "a0000000-0000-0000-0000-000000000001"
+  const demoCampaignId = process.env.DEMO_CAMPAIGN_ID || "c0000000-0000-0000-0000-000000000001"
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
-      <div className="container mx-auto px-4 py-8 max-w-6xl">
-        <header className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-slate-900 mb-2">Voice AI Demo</h1>
-          <p className="text-slate-600">Test the AI agent with real-time debugging</p>
+    <main className="min-h-screen bg-background p-6 sm:p-10">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
+        <header className="space-y-2">
+          <h1 className="text-3xl font-bold tracking-tight">Voice AI Demo</h1>
+          <p className="text-muted-foreground text-base">
+            Test the full-featured voice AI interface with live diagnostics, transcript capture, and handoff testing.
+          </p>
         </header>
 
-        <Suspense fallback={<div className="text-center">Loading...</div>}>
-          <DemoCallCard campaignId={campaign.id} agentId={campaign.agent_id} />
-        </Suspense>
+        <DemoCallCard campaignId={demoCampaignId} agentId={demoAgentId} />
       </div>
-    </div>
+    </main>
   )
 }

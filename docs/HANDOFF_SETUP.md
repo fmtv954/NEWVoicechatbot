@@ -21,10 +21,10 @@ Optional helpers:
 
 ## 2. Restart and Verify Environment
 
-```bash
+\`\`\`bash
 pnpm dev
 open http://localhost:3000/api/env/status
-```
+\`\`\`
 
 Ensure the page reports `present: true` for each key above.
 
@@ -32,12 +32,12 @@ Ensure the page reports `present: true` for each key above.
 
 Use the helper script to exercise `/api/handoff/request` without running a full call:
 
-```bash
+\`\`\`bash
 pnpm tsx scripts/test-handoff-request.ts \
   --agent-id=a0000000-0000-0000-0000-000000000001 \
   --campaign-id=c0000000-0000-0000-0000-000000000001 \
   --reason="Manual QA handoff"
-```
+\`\`\`
 
 The script prints the HTTP status, headers, and response body. You should see `200 OK`, the ticket ID, and `notification_sent: true`.
 
