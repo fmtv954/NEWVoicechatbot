@@ -1189,66 +1189,8 @@ class CallClient {
   }
 
   private monitorOutboundAudioLevel(sender: RTCRtpSender): void {
-    let lastBytes = 0
-    let lastPackets = 0
-    let lastAudioEnergy = 0
-
-    const checkStats = async () => {
-      if (!sender || !this.peerConnection) return
-
-      try {
-        const stats = await sender.getStats()
-        let currentBytes = 0
-        let currentPackets = 0
-        let audioLevel = 0
-        let totalAudioEnergy = 0
-
-        stats.forEach((report) => {
-          if (report.type === "outbound-rtp" && report.kind === "audio") {
-            currentBytes = report.bytesSent || 0
-            currentPackets = report.packetsSent || 0
-            audioLevel = report.audioLevel || 0
-            totalAudioEnergy = report.totalAudioEnergy || 0
-          }
-        })
-
-        const bytesIncreased = currentBytes > lastBytes
-        const packetsIncreased = currentPackets > lastPackets
-        const energyIncreased = totalAudioEnergy > lastAudioEnergy
-
-        if (bytesIncreased && packetsIncreased) {
-          if (energyIncreased && audioLevel > 0) {
-            console.log("[v0] ✓ AUDIO TRANSMITTING (with sound):", {
-              bytes: currentBytes,
-              packets: currentPackets,
-              audioLevel: audioLevel.toFixed(4),
-              energyDelta: (totalAudioEnergy - lastAudioEnergy).toFixed(6),
-            })
-          } else {
-            console.log("[v0] ⚠️ Bytes transmitting but NO AUDIO ENERGY - sending silence frames:", {
-              bytes: currentBytes,
-              packets: currentPackets,
-              audioLevel: audioLevel.toFixed(4),
-              totalAudioEnergy: totalAudioEnergy.toFixed(6),
-            })
-          }
-        } else if (lastBytes > 0) {
-          console.log("[v0] ⚠️ Microphone NOT transmitting - bytes/packets not increasing")
-        }
-
-        lastBytes = currentBytes
-        lastPackets = currentPackets
-        lastAudioEnergy = totalAudioEnergy
-
-        if (this.peerConnection) {
-          setTimeout(checkStats, 500)
-        }
-      } catch (err) {
-        console.error("[v0] Failed to get sender stats:", err)
-      }
-    }
-
-    setTimeout(checkStats, 1000)
+    // Note: Audio monitoring via getStats() removed (unreliable on Chromium)
+    console.log("[v0] Note: Audio monitoring via getStats() removed (unreliable on Chromium)")
   }
 
   private pauseMicrophoneForTTS(): void {
@@ -1361,7 +1303,6 @@ class CallClient {
       console.log("[v0] - Headers:", Object.fromEntries(tokenResponse.headers.entries()))
 
       if (!tokenResponse.ok) {
-        // FIX: undeclared variable 'response'
         const errorData = await tokenResponse.json()
         console.error("[v0] ❌ Token request failed:", errorData)
         throw new Error(errorData.error || "Failed to get customer token")
@@ -1472,27 +1413,42 @@ class CallClient {
       console.log("[v0] - Room name:", this.livekitRoom.name)
       console.log("[v0] - Remote participants count:", this.livekitRoom.remoteParticipants.size)
 
-      if (this.localStream) {
-        const audioTrack = this.localStream.getAudioTracks()[0]
+      console.log("[v0] 🎤 STEP 6: Acquiring separate microphone stream for LiveKit...")
 
-        console.log("[v0] 🎤 STEP 6: Publishing customer microphone...")
-        console.log("[v0] - Track ID:", audioTrack.id)
-        console.log("[v0] - Track label:", audioTrack.label)
-        console.log("[v0] - Track enabled:", audioTrack.enabled)
-        console.log("[v0] - Track readyState:", audioTrack.readyState)
-        console.log("[v0] - Track muted:", audioTrack.muted)
+      try {
+        const livekitStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            sampleRate: { ideal: 24000 },
+            channelCount: { ideal: 1 },
+          },
+        })
 
-        await this.livekitRoom.localParticipant.publishTrack(audioTrack)
+        const livekitAudioTrack = livekitStream.getAudioTracks()[0]
 
-        console.log("[v0] ✅ CUSTOMER MICROPHONE PUBLISHED")
+        console.log("[v0] ✓ Separate microphone stream acquired for LiveKit")
+        console.log("[v0] - Track ID:", livekitAudioTrack.id)
+        console.log("[v0] - Track label:", livekitAudioTrack.label)
+        console.log("[v0] - Track enabled:", livekitAudioTrack.enabled)
+        console.log("[v0] - Track readyState:", livekitAudioTrack.readyState)
+        console.log("[v0] - Track muted:", livekitAudioTrack.muted)
+
+        await this.livekitRoom.localParticipant.publishTrack(livekitAudioTrack)
+
+        console.log("[v0] ✅ CUSTOMER MICROPHONE PUBLISHED (separate stream)")
         console.log("[v0] ============================================")
         console.log("[v0] 🎉 CUSTOMER AUDIO BRIDGE COMPLETE")
         console.log("[v0] ============================================")
 
         this.emit("customer_joined_livekit", { room, ticket_id: this.livekitTicketId })
-      } else {
-        console.error("[v0] ❌ No local stream available to publish")
-        throw new Error("No local stream available")
+      } catch (micError) {
+        console.error("[v0] ❌ Failed to acquire separate microphone for LiveKit:", micError)
+        throw new Error(
+          "Failed to get microphone access for LiveKit: " +
+            (micError instanceof Error ? micError.message : "Unknown error"),
+        )
       }
     } catch (error) {
       console.error("[v0] ============================================")
